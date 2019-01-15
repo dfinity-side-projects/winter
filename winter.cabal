@@ -1,0 +1,153 @@
+Cabal-Version: 2.2
+Name:          winter
+Version:       1.0.0
+Synopsis:      Haskell port of the WebAssembly OCaml reference interpreter
+License:       MIT
+License-file:  LICENSE
+Copyright:     2018-2019 DFINITY Stiftung
+Author:        Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.org>
+Maintainer:    Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.org>
+Stability:     Experimental
+Category:      Interpreter
+Homepage:      https://github.com/dfinity/winter
+Bug-Reports:   https://github.com/dfinity/winter/issues
+Build-Type:    Simple
+
+Common generic
+  default-language: Haskell2010
+  build-depends:    base >=4.10 && <5,
+  ghc-options:      -O2 -Wall -Wredundant-constraints
+
+Library
+  Import: generic
+  Build-Depends:
+    FloatingHex,
+    array,
+    binary,
+    bytestring,
+    containers,
+    data-default-class,
+    data-fix,
+    deepseq,
+    lifted-base,
+    monad-control,
+    microlens-platform,
+    mtl,
+    nats,
+    parsec,
+    text,
+    transformers,
+    vector
+  Exposed-Modules:
+    Wasm.Binary.Custom
+    Wasm.Binary.Decode
+    Wasm.Binary.Encode
+    Wasm.Binary.Guard
+    Wasm.Binary.LEB128
+    Wasm.Binary.Lift
+    Wasm.Exec.Eval
+    Wasm.Exec.EvalNumeric
+    Wasm.Runtime.Mutable
+    Wasm.Runtime.Func
+    Wasm.Runtime.Global
+    Wasm.Runtime.Instance
+    Wasm.Runtime.Memory
+    Wasm.Runtime.Table
+    Wasm.Syntax.AST
+    Wasm.Syntax.DSL
+    Wasm.Syntax.Memory
+    Wasm.Syntax.Ops
+    Wasm.Syntax.Ops.Float
+    Wasm.Syntax.Ops.Int
+    Wasm.Syntax.Ops.Kind
+    Wasm.Syntax.Types
+    Wasm.Syntax.Values
+    Wasm.Text.Wast
+    Wasm.Text.Winter
+    Wasm.Util.NFData
+    Wasm.Util.Show
+    Wasm.Util.Source
+  HS-Source-Dirs:
+    src
+
+Executable wasm-invoke
+  Import: generic
+  Build-Depends:
+    binary,
+    bytestring,
+    cmdargs,
+    containers,
+    data-default-class,
+    winter,
+    mtl,
+    parsec,
+    text
+  HS-Source-Dirs:
+    app
+  Main-Is:
+    Main.hs
+
+Test-Suite wasm-test-suite
+  Import: generic
+  Build-Depends:
+    FloatingHex,
+    array,
+    binary,
+    bytestring,
+    containers,
+    data-default-class,
+    data-fix,
+    deepseq,
+    directory,
+    filepath,
+    lifted-base,
+    monad-control,
+    microlens-platform,
+    mtl,
+    parsec,
+    process,
+    tasty,
+    tasty-hunit,
+    tasty-quickcheck,
+    temporary,
+    text,
+    transformers,
+    vector
+  HS-Source-Dirs:
+    src,
+    test
+  Main-Is:
+    Main.hs
+  Other-Modules:
+    Wasm.Binary.Decode
+    Wasm.Binary.Guard
+    Wasm.Binary.LEB128
+    Wasm.Binary.Lift
+    Wasm.Exec.Eval
+    Wasm.Exec.EvalNumeric
+    Wasm.Runtime.Mutable
+    Wasm.Runtime.Func
+    Wasm.Runtime.Global
+    Wasm.Runtime.Instance
+    Wasm.Runtime.Memory
+    Wasm.Runtime.Table
+    Wasm.Syntax.AST
+    Wasm.Syntax.Memory
+    Wasm.Syntax.Ops
+    Wasm.Syntax.Ops.Float
+    Wasm.Syntax.Ops.Int
+    Wasm.Syntax.Ops.Kind
+    Wasm.Syntax.Types
+    Wasm.Syntax.Values
+    Wasm.Text.SpecTest
+    Wasm.Text.Wast
+    Wasm.Text.Wat2Wasm
+    Wasm.Text.Winter
+    Wasm.Util.NFData
+    Wasm.Util.Show
+    Wasm.Util.Source
+    Property
+    Unit
+    Spec
+  Type:
+    exitcode-stdio-1.0
