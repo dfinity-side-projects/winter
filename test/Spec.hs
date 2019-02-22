@@ -9,11 +9,12 @@ import qualified Data.Map as M
 import           Test.Tasty (TestTree, testGroup)
 import           Test.Tasty.HUnit (testCase, assertEqual, assertFailure)
 
-import           Wasm.Text.SpecTest (spectest)
 import           Wasm.Text.Wast (parseWastFile)
-import           Wasm.Text.Wat2Wasm (wat2Wasm)
 import           Wasm.Text.Winter (Winter)
 import           Wasm.Util.Source (Phrase)
+
+import           SpecTest (spectest)
+import           Wat2Wasm (wat2Wasm)
 
 tests :: [FilePath] -> TestTree
 tests files = testGroup "spec" $ map prep files

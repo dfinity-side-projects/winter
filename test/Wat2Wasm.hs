@@ -1,4 +1,4 @@
-module Wasm.Text.Wat2Wasm (wat2Wasm) where
+module Wat2Wasm (wat2Wasm) where
 
 import           Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BL

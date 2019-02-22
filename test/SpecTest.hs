@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Wasm.Text.SpecTest (spectest) where
+module SpecTest (spectest) where
 
 import           Control.Monad.Except
 import           Data.Default.Class

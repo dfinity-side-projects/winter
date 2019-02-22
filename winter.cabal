@@ -90,6 +90,7 @@ Executable wasm-invoke
 Test-Suite wasm-test-suite
   Import: generic
   Build-Depends:
+    winter,
     FloatingHex,
     array,
     binary,
@@ -114,38 +115,12 @@ Test-Suite wasm-test-suite
     transformers,
     vector
   HS-Source-Dirs:
-    src,
     test
   Main-Is:
     Main.hs
   Other-Modules:
-    Wasm.Binary.Decode
-    Wasm.Binary.Guard
-    Wasm.Binary.LEB128
-    Wasm.Binary.Lift
-    Wasm.Exec.Eval
-    Wasm.Exec.EvalNumeric
-    Wasm.Runtime.Mutable
-    Wasm.Runtime.Func
-    Wasm.Runtime.Global
-    Wasm.Runtime.Instance
-    Wasm.Runtime.Memory
-    Wasm.Runtime.Table
-    Wasm.Syntax.AST
-    Wasm.Syntax.Memory
-    Wasm.Syntax.Ops
-    Wasm.Syntax.Ops.Float
-    Wasm.Syntax.Ops.Int
-    Wasm.Syntax.Ops.Kind
-    Wasm.Syntax.Types
-    Wasm.Syntax.Values
-    Wasm.Text.SpecTest
-    Wasm.Text.Wast
-    Wasm.Text.Wat2Wasm
-    Wasm.Text.Winter
-    Wasm.Util.NFData
-    Wasm.Util.Show
-    Wasm.Util.Source
+    SpecTest
+    Wat2Wasm
     Property
     Unit
     Spec
