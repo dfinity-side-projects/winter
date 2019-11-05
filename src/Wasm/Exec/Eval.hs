@@ -369,11 +369,14 @@ step_work vs at i k = case i of
       Func.HostFuncEff _ f -> do
         -- jww (2018-11-01): Need an exception handler here, so we can
         -- report host errors.
-        res <- lift $ lift $ reverse <$> f args
-        lift $ checkTypes at outs res
-        k $ Code (res ++ vs') []
-        -- try (reverse (f args) ++ vs', [])
-        -- with Crash (_, msg) -> EvalCrashError at msg)
+        res' <- lift $ lift $ f args
+        case res' of
+          Left err -> throwError $ EvalTrapError at err
+          Right (reverse -> res) -> do
+            lift $ checkTypes at outs res
+            k $ Code (res ++ vs') []
+            -- try (reverse (f args) ++ vs', [])
+            -- with Crash (_, msg) -> EvalCrashError at msg)
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Phrase IO
@@ -673,7 +676,7 @@ createFunc inst ref f = do
 createHostFunc :: FuncType -> ([Value] -> [Value]) -> ModuleFunc f m
 createHostFunc = Func.allocHost
 
-createHostFuncEff :: FuncType -> ([Value] -> m [Value]) -> ModuleFunc f m
+createHostFuncEff :: FuncType -> ([Value] -> m (Either String [Value])) -> ModuleFunc f m
 createHostFuncEff = Func.allocHostEff
 
 createTable :: (Regioned f, MonadRef m, Monad m)
