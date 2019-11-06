@@ -13,9 +13,10 @@ import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Array.Unsafe (castSTUArray)
 import           Data.Bits
 import           Data.Int
-import           Data.Vector (Vector, MVector)
+import           Data.Vector (Vector)
 import qualified Data.Vector as V
-import qualified Data.Vector.Mutable as VM
+import           Data.Vector.Unboxed.Mutable (MVector)
+import qualified Data.Vector.Unboxed.Mutable as VM
 import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
