@@ -15,7 +15,8 @@ main = do
   wasmPath <- case mwasmPath of
       Nothing -> error "Could not find 'wasm' executable"
       Just path -> return path
-  let testDir = takeDirectory (takeDirectory wasmPath) </> "test/core"
+  -- let testDir = takeDirectory (takeDirectory wasmPath) </> "test/core"
+  let testDir = "/home/jojo/dfinity/wasm-spec/test/core"
   putStrLn $ "Using wasm spec test directory: " ++ testDir
   files <- listDirectory testDir
   let wastFiles = flip concatMap files $ \file ->
