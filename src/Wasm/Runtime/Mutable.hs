@@ -1,23 +1,24 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 module Wasm.Runtime.Mutable where
 
 import Data.IORef
 
-class MonadRef m where
-  data Mutable m a :: *
+import Control.Monad.Primitive
+import Data.Primitive.MutVar
 
-  newMut    :: a -> m (Mutable m a)
-  getMut    :: Mutable m a -> m a
-  setMut    :: Mutable m a -> a -> m ()
-  modifyMut :: Mutable m a -> (a -> a) -> m ()
+type MonadRef m = PrimMonad m
 
-instance MonadRef IO where
-  newtype Mutable IO a = IOMutable { getIOMutable :: IORef a }
+type Mutable m a = MutVar (PrimState m) a
 
-  newMut    = fmap IOMutable . newIORef
-  getMut    = readIORef . getIOMutable
-  setMut    = writeIORef . getIOMutable
-  modifyMut = modifyIORef . getIOMutable
+newMut    :: MonadRef m => a -> m (Mutable m a)
+newMut = newMutVar
+getMut    :: MonadRef m => Mutable m a -> m a
+getMut = readMutVar
+setMut    :: MonadRef m => Mutable m a -> a -> m ()
+setMut = writeMutVar
+modifyMut :: MonadRef m => Mutable m a -> (a -> a) -> m ()
+modifyMut = modifyMutVar

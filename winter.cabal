@@ -37,7 +37,8 @@ Library
     parsec,
     text,
     transformers,
-    vector
+    vector,
+    primitive
   Exposed-Modules:
     Wasm.Binary.Custom
     Wasm.Binary.Decode
@@ -106,6 +107,7 @@ Test-Suite wasm-test-suite
     microlens-platform,
     mtl,
     parsec,
+    primitive,
     process,
     tasty,
     tasty-hunit,
