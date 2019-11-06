@@ -13,7 +13,7 @@ import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Array.Unsafe (castSTUArray)
 import           Data.Bits
 import           Data.Int
-import           Data.Vector (Vector)
+import           Data.Vector (Vector, MVector)
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 import           Data.Word
@@ -26,8 +26,10 @@ import           Wasm.Syntax.Types
 import           Wasm.Syntax.Values (Value)
 import qualified Wasm.Syntax.Values as Values
 
+import Control.Monad.Primitive
+
 data MemoryInst m = MemoryInst
-  { _miContent :: Mutable m (Vector Word8)
+  { _miContent :: Mutable m (MVector (PrimState m) Word8)
   , _miMax :: Maybe Size
   }
 
@@ -58,17 +60,17 @@ withinLimits n = \case
   Nothing -> True
   Just m -> n <= m
 
-create :: Size -> Either MemoryError (Vector Word8)
+create :: PrimMonad m => Size -> m (Either MemoryError (MVector (PrimState m) Word8))
 create n
-  | n > 0x10000 = Left MemorySizeOverflow
-  | otherwise   = Right $ V.replicate (fromIntegral (n * pageSize)) 0
+  | n > 0x10000 = return $ Left MemorySizeOverflow
+  | otherwise   = Right <$> VM.replicate (fromIntegral (n * pageSize)) 0
 
 alloc :: (MonadRef m, Monad m)
       => MemoryType -> ExceptT MemoryError m (MemoryInst m)
-alloc (Limits min' mmax) = case create min' of
+alloc (Limits min' mmax) = create min' >>= \case
   Left err -> throwError err
   Right m -> do
-    mem <- lift $ newMut m
+    mem <- newMut m
     pure $ assert (withinLimits min' mmax) $
       MemoryInst
         { _miContent = mem
@@ -78,7 +80,7 @@ alloc (Limits min' mmax) = case create min' of
 bound :: (MonadRef m, Monad m) => MemoryInst m -> m Size
 bound mem = do
   m <- getMut (mem^.miContent)
-  pure $ fromIntegral $ V.length m
+  pure $ fromIntegral $ VM.length m
 
 size :: (MonadRef m, Monad m) => MemoryInst m -> m Size
 size mem = liftM2 div (bound mem) (pure pageSize)
@@ -97,21 +99,22 @@ grow mem delta = do
          throwError MemorySizeLimit
      | newSize > 0x10000 ->
          throwError MemorySizeOverflow
-     | otherwise -> do
-         lift $ modifyMut (mem^.miContent) $ \v -> V.create $ do
-           mv <- V.thaw v
-           mv' <- VM.grow mv (fromIntegral (delta * pageSize))
-           forM_ [oldSize * pageSize .. newSize * pageSize - 1] $ \i ->
-             VM.write mv' (fromIntegral i) 0
-           return mv'
+     | otherwise -> lift $ do
+        mv <- getMut (mem^.miContent)
+        mv' <- VM.grow mv (fromIntegral (delta * pageSize))
+        forM_ [oldSize * pageSize .. newSize * pageSize - 1] $ \i ->
+          VM.write mv' (fromIntegral i) 0
+        setMut (mem^.miContent) mv'
 
 loadByte :: (MonadRef m, Monad m)
          => MemoryInst m -> Address -> ExceptT MemoryError m Word8
 loadByte mem a = do
-  m <- lift $ getMut (mem^.miContent)
-  case m V.!? fromIntegral a of
-    Nothing -> throwError MemoryBoundsError
-    Just w  -> pure w
+  bnd <- lift $ bound mem
+  if | a >= fromIntegral bnd ->
+       throwError MemoryBoundsError
+     | otherwise -> lift $ do
+        mv <- getMut (mem^.miContent)
+        VM.read mv (fromIntegral a)
 
 storeByte :: (MonadRef m, Monad m)
           => MemoryInst m -> Address -> Word8
@@ -120,9 +123,9 @@ storeByte mem a b = do
   bnd <- lift $ bound mem
   if | a >= fromIntegral bnd ->
        throwError MemoryBoundsError
-     | otherwise ->
-       lift $ modifyMut (mem^.miContent) $
-         V.modify (\vec -> VM.write vec (fromIntegral a) b)
+     | otherwise -> lift $ do
+        mv <- getMut (mem^.miContent)
+        VM.write mv (fromIntegral a) b
 
 loadBytes :: (MonadRef m, Monad m)
           => MemoryInst m -> Address -> Size
@@ -137,9 +140,9 @@ storeBytes mem a bs = do
   bnd <- lift $ bound mem
   if | fromIntegral a + V.length bs > fromIntegral bnd ->
        throwError MemoryBoundsError
-     | otherwise ->
-       lift $ modifyMut (mem^.miContent)
-         (V.// zip [fromIntegral a..] (V.toList bs))
+     | otherwise -> lift $ do
+        mv <- getMut (mem^.miContent)
+        zipWithM_ (VM.write mv) [fromIntegral a..] (V.toList bs)
 
 effectiveAddress :: Monad m
                  => Address -> Offset -> ExceptT MemoryError m Address
