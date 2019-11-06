@@ -4,7 +4,23 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Wasm.Runtime.Memory where
+module Wasm.Runtime.Memory
+  ( MemoryInst
+  , doubleFromBits, doubleToBits
+  , floatFromBits, floatToBits
+  , typeOf
+  , MemoryError(..)
+  , alloc
+  , bound
+  , grow
+  , size
+  , storeBytes
+  , storeValue
+  , storePacked
+  , loadPacked
+  , loadBytes
+  , loadValue
+  ) where
 
 import           Control.Exception
 import           Control.Monad
