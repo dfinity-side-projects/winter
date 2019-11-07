@@ -130,3 +130,4 @@ value = need traverse
 {-# INLINE value #-}
 
 {-# SPECIALIZE value :: Phrase a -> a #-}
+{-# SPECIALIZE value :: Identity a -> a #-}
