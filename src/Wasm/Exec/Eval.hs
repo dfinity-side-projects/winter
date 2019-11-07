@@ -381,9 +381,9 @@ step_work vs at i k = case i of
             -- with Crash (_, msg) -> EvalCrashError at msg)
 
 {-# SPECIALIZE step_work
-      :: Stack Value -> Region -> AdminInstr Phrase IO
-      -> (Code Phrase IO -> CEvalT Phrase IO r)
-      -> CEvalT Phrase IO r #-}
+      :: Stack Value -> Region -> AdminInstr Identity IO
+      -> (Code Identity IO -> CEvalT Identity IO r)
+      -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Identity (ST s)
@@ -578,9 +578,9 @@ instr vs at e' k = case (unFix e', vs) of
       ("missing or ill-typed operand on stack (" ++ s1 ++ " : " ++ s2 ++ ")")
 
 {-# SPECIALIZE instr
-      :: Stack Value -> Region -> Instr Phrase
-      -> (Code Phrase IO -> CEvalT Phrase IO r)
-      -> CEvalT Phrase IO r #-}
+      :: Stack Value -> Region -> Instr Identity
+      -> (Code Identity IO -> CEvalT Identity IO r)
+      -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Identity
@@ -595,8 +595,8 @@ step (Code vs (e:es)) k = do
   step_work vs (region e) (value e) $ k . (codeInstrs <>~ es)
 
 {-# SPECIALIZE step
-      :: Code Phrase IO -> (Code Phrase IO -> CEvalT Phrase IO r)
-      -> CEvalT Phrase IO r #-}
+      :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
+      -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE step
       :: Code Identity (ST s) -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
@@ -611,7 +611,7 @@ eval c@(Code vs es) = case es of
   _ -> step c eval
 
 {-# SPECIALIZE eval
-      :: Code Phrase IO -> CEvalT Phrase IO (Stack Value) #-}
+      :: Code Identity IO -> CEvalT Identity IO (Stack Value) #-}
 
 {-# SPECIALIZE eval
       :: Code Identity (ST s) -> CEvalT Identity (ST s) (Stack Value) #-}
@@ -636,9 +636,9 @@ invoke mods inst func vs = do
   --   Exhaustion.error at "call stack exhausted"
 
 {-# SPECIALIZE invoke
-      :: IntMap (ModuleInst Phrase IO)
-      -> ModuleInst Phrase IO
-      -> ModuleFunc Phrase IO
+      :: IntMap (ModuleInst Identity IO)
+      -> ModuleInst Identity IO
+      -> ModuleFunc Identity IO
       -> [Value]
       -> EvalT IO [Value] #-}
 
@@ -660,8 +660,8 @@ invokeByName mods inst name vs = do
       "Cannot invoke export " ++ unpack name ++ ": " ++ show e
 
 {-# SPECIALIZE invokeByName
-      :: IntMap (ModuleInst Phrase IO)
-      -> ModuleInst Phrase IO -> Text -> [Value] -> EvalT IO [Value] #-}
+      :: IntMap (ModuleInst Identity IO)
+      -> ModuleInst Identity IO -> Text -> [Value] -> EvalT IO [Value] #-}
 
 {-# SPECIALIZE invokeByName
       :: IntMap (ModuleInst Identity (ST s))
@@ -675,7 +675,7 @@ getByName inst name = case inst ^. miExports.at name of
     "Cannot get exported global " ++ unpack name ++ ": " ++ show e
 
 {-# SPECIALIZE getByName
-      :: ModuleInst Phrase IO -> Text -> EvalT IO Value #-}
+      :: ModuleInst Identity IO -> Text -> EvalT IO Value #-}
 
 evalConst :: (Regioned f, MonadRef m, Show1 f)
           => IntMap (ModuleInst f m)
@@ -853,10 +853,10 @@ initialize (value -> mod) names mods = do
   pure (ref, inst')
 
 {-# SPECIALIZE initialize
-           :: Phrase (Module Phrase)
+           :: Identity (Module Identity)
            -> Map Text ModuleRef
-           -> IntMap (ModuleInst Phrase IO)
-           -> EvalT IO (ModuleRef, ModuleInst Phrase IO) #-}
+           -> IntMap (ModuleInst Identity IO)
+           -> EvalT IO (ModuleRef, ModuleInst Identity IO) #-}
 
 nextKey :: IntMap a -> IM.Key
 nextKey m = go (max 1 (IM.size m))
