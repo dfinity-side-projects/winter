@@ -27,7 +27,7 @@ data GlobalError
   | GlobalNotMutable
   deriving (Show, Eq)
 
-alloc :: (MonadRef m, Monad m)
+alloc :: (MonadRef m)
       => GlobalType -> Value -> ExceptT GlobalError m (GlobalInst m)
 alloc (GlobalType t mut) v =
   if Values.typeOf v /= t
@@ -36,7 +36,7 @@ alloc (GlobalType t mut) v =
     m <- lift $ newMut v
     pure $ GlobalInst m mut
 
-typeOf :: (MonadRef m, Monad m) => GlobalInst m -> m GlobalType
+typeOf :: (MonadRef m) => GlobalInst m -> m GlobalType
 typeOf glob = do
   content <- getMut (glob^.giContent)
   pure $ GlobalType (Values.typeOf content) (glob^.giMut)
@@ -44,7 +44,7 @@ typeOf glob = do
 load :: MonadRef m => GlobalInst m -> m Value
 load glob = getMut (glob^.giContent)
 
-store :: (MonadRef m, Monad m)
+store :: (MonadRef m)
       => GlobalInst m -> Value -> ExceptT GlobalError m ()
 store glob v = do
   content <- lift $ getMut (glob^.giContent)

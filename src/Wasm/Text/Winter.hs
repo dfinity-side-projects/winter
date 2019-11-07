@@ -24,7 +24,7 @@ import           Wasm.Util.Source
 
 data Winter (f :: * -> *) = Winter
 
-instance (MonadRef m, Monad m, Regioned f, Decode.Decodable f, Show1 f)
+instance (MonadRef m, Regioned f, Decode.Decodable f, Show1 f)
     => WasmEngine (Winter f) m where
   type Value (Winter f) = Values.Value
   type Module (Winter f) = AST.Module f

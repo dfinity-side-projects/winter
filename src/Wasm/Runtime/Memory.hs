@@ -82,7 +82,7 @@ create n
   | n > 0x10000 = return $ Left MemorySizeOverflow
   | otherwise   = Right <$> VM.replicate (fromIntegral (n * pageSize)) 0
 
-alloc :: (MonadRef m, Monad m)
+alloc :: (MonadRef m)
       => MemoryType -> ExceptT MemoryError m (MemoryInst m)
 alloc (Limits min' mmax) = create min' >>= \case
   Left err -> throwError err
@@ -94,18 +94,18 @@ alloc (Limits min' mmax) = create min' >>= \case
         , _miMax = mmax
         }
 
-bound :: (MonadRef m, Monad m) => MemoryInst m -> m Size
+bound :: (MonadRef m) => MemoryInst m -> m Size
 bound mem = do
   m <- getMut (mem^.miContent)
   pure $ fromIntegral $ VM.length m
 
-size :: (MonadRef m, Monad m) => MemoryInst m -> m Size
+size :: (MonadRef m) => MemoryInst m -> m Size
 size mem = liftM2 div (bound mem) (pure pageSize)
 
-typeOf :: (MonadRef m, Monad m) => MemoryInst m -> m MemoryType
+typeOf :: (MonadRef m) => MemoryInst m -> m MemoryType
 typeOf mem = Limits <$> size mem <*> pure (mem^.miMax)
 
-grow :: (MonadRef m, Monad m)
+grow :: (MonadRef m)
      => MemoryInst m -> Size -> ExceptT MemoryError m ()
 grow mem delta = do
   oldSize <- lift $ size mem
@@ -123,7 +123,7 @@ grow mem delta = do
           VM.write mv' (fromIntegral i) 0
         setMut (mem^.miContent) mv'
 
-loadByte :: (MonadRef m, Monad m)
+loadByte :: (MonadRef m)
          => MemoryInst m -> Address -> ExceptT MemoryError m Word8
 loadByte mem a = do
   bnd <- lift $ bound mem
@@ -133,7 +133,7 @@ loadByte mem a = do
         mv <- getMut (mem^.miContent)
         VM.read mv (fromIntegral a)
 
-storeByte :: (MonadRef m, Monad m)
+storeByte :: (MonadRef m)
           => MemoryInst m -> Address -> Word8
           -> ExceptT MemoryError m ()
 storeByte mem a b = do
@@ -144,13 +144,13 @@ storeByte mem a b = do
         mv <- getMut (mem^.miContent)
         VM.write mv (fromIntegral a) b
 
-loadBytes :: (MonadRef m, Monad m)
+loadBytes :: (MonadRef m)
           => MemoryInst m -> Address -> Size
           -> ExceptT MemoryError m (Vector Word8)
 loadBytes mem a n = V.generateM (fromIntegral n) $ \i ->
   loadByte mem (a + fromIntegral i)
 
-storeBytes :: (MonadRef m, Monad m)
+storeBytes :: (MonadRef m)
            => MemoryInst m -> Address -> Vector Word8
            -> ExceptT MemoryError m ()
 storeBytes mem a bs = do
@@ -169,7 +169,7 @@ effectiveAddress a o = do
     then throwError MemoryBoundsError
     else pure ea
 
-loadn :: (MonadRef m, Monad m)
+loadn :: (MonadRef m)
       => MemoryInst m -> Address -> Offset -> Size
       -> ExceptT MemoryError m Int64
 loadn mem a o n =
@@ -186,7 +186,7 @@ loadn mem a o n =
        b <- loadByte mem a'
        pure $ fromIntegral b .|. x
 
-storen :: (MonadRef m, Monad m)
+storen :: (MonadRef m)
        => MemoryInst m -> Address -> Offset -> Size -> Int64
        -> ExceptT MemoryError m ()
 storen mem a o n x =
@@ -217,7 +217,7 @@ doubleToBits x = runST (cast x)
 doubleFromBits :: Int64 -> Double
 doubleFromBits x = runST (cast x)
 
-loadValue :: (MonadRef m, Monad m)
+loadValue :: (MonadRef m)
           => MemoryInst m -> Address -> Offset -> ValueType
           -> ExceptT MemoryError m Value
 loadValue mem a o t =
@@ -227,7 +227,7 @@ loadValue mem a o t =
     F32Type -> Values.F32 (floatFromBits (fromIntegral n))
     F64Type -> Values.F64 (doubleFromBits n)
 
-storeValue :: (MonadRef m, Monad m)
+storeValue :: (MonadRef m)
            => MemoryInst m -> Address -> Offset -> Value
            -> ExceptT MemoryError m ()
 storeValue mem a o v =
@@ -244,7 +244,7 @@ extend x n = \case
   ZX -> x
   SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
 
-loadPacked :: (MonadRef m, Monad m)
+loadPacked :: (MonadRef m)
            => PackSize
            -> Extension
            -> MemoryInst m
@@ -262,7 +262,7 @@ loadPacked sz ext mem a o t =
       I64Type -> pure $ Values.I64 x
       _ -> throwError MemoryTypeError
 
-storePacked :: (MonadRef m, Monad m)
+storePacked :: (MonadRef m)
             => PackSize -> MemoryInst m -> Address -> Offset -> Value
             -> ExceptT MemoryError m ()
 storePacked sz mem a o v =

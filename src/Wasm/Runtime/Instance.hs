@@ -91,7 +91,7 @@ emptyModuleInst m = ModuleInst
   , _miExports  = mempty
   }
 
-externTypeOf :: (MonadRef m, Monad m) => Extern f m -> m ExternType
+externTypeOf :: MonadRef m => Extern f m -> m ExternType
 externTypeOf = \case
   ExternFunc func   -> pure $ ExternFuncType (Func.typeOf func)
   ExternTable tab   -> ExternTableType <$> Table.typeOf tab

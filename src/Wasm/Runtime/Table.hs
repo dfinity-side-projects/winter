@@ -44,7 +44,7 @@ withinLimits sz = \case
 create :: Size -> Vector (Maybe a)
 create sz = V.replicate (fromIntegral sz) Nothing
 
-alloc :: (MonadRef m, Monad m)
+alloc :: MonadRef m
       => TableType -> ExceptT TableError m (TableInst m a)
 alloc (TableType elemType (Limits min' mmax)) = do
   tbl <- lift $ newMut (create min')
@@ -55,17 +55,17 @@ alloc (TableType elemType (Limits min' mmax)) = do
       , _tiElemType = elemType
       }
 
-size :: (MonadRef m, Monad m) => TableInst m a -> m Size
+size :: MonadRef m => TableInst m a -> m Size
 size tab = do
   content <- getMut (tab^.tiContent)
   pure $ fromIntegral $ V.length content
 
-typeOf :: (MonadRef m, Monad m) => TableInst m a -> m TableType
+typeOf :: MonadRef m => TableInst m a -> m TableType
 typeOf tab = do
   sz <- size tab
   pure $ TableType (tab^.tiElemType) (Limits sz (tab^.tiMax))
 
-grow :: (MonadRef m, Monad m)
+grow :: MonadRef m
      => TableInst m a -> Size -> ExceptT TableError m ()
 grow tab delta = do
   oldSize <- lift $ size tab
@@ -78,7 +78,7 @@ grow tab delta = do
            mv <- V.thaw v
            VM.grow mv (fromIntegral (newSize - oldSize))
 
-load :: (MonadRef m, Monad m) => TableInst m a -> Index -> m (Maybe a)
+load :: MonadRef m => TableInst m a -> Index -> m (Maybe a)
 load tab i = do
   content <- getMut (tab^.tiContent)
   pure $ join $ content V.!? fromIntegral i

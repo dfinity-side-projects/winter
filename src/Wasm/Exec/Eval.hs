@@ -225,7 +225,7 @@ local :: (Regioned f, Monad m)
       => Frame f m -> Var f -> EvalT m (Mutable m Value)
 local frame = lookup "local" frame frameLocals
 
-elem :: (Regioned f, MonadRef m, Monad m)
+elem :: (Regioned f, MonadRef m)
      => ModuleInst f m -> Var f -> Table.Index -> Region
      -> EvalT m (ModuleFunc f m)
 elem inst x i at' = do
@@ -236,7 +236,7 @@ elem inst x i at' = do
       EvalTrapError at' ("uninitialized element " ++ show i)
     Just f -> pure f
 
-funcElem :: (Regioned f, MonadRef m, Monad m)
+funcElem :: (Regioned f, MonadRef m)
          => ModuleInst f m -> Var f -> Table.Index -> Region
          -> EvalT m (ModuleFunc f m)
 funcElem = elem
@@ -286,7 +286,7 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
  *   c : config
  -}
 
-step_work :: (Regioned f, MonadRef m, Monad m, Show1 f)
+step_work :: (Regioned f, MonadRef m, Show1 f)
           => Stack Value -> Region -> AdminInstr f m
           -> (Code f m -> CEvalT f m r)
           -> CEvalT f m r
@@ -390,7 +390,7 @@ step_work vs at i k = case i of
       -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
-instr :: (Regioned f, {-Show1 f,-} MonadRef m, Monad m)
+instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
       -> (Code f m -> CEvalT f m r)
       -> CEvalT f m r
@@ -587,7 +587,7 @@ instr vs at e' k = case (unFix e', vs) of
       -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
-step :: (Regioned f, MonadRef m, Monad m, Show1 f)
+step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
 step (Code _ []) _ = error "Cannot step without instructions"
 step (Code vs (e:es)) k = do
@@ -602,7 +602,7 @@ step (Code vs (e:es)) k = do
       :: Code Identity (ST s) -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
-eval :: (Regioned f, MonadRef m, Monad m, Show1 f)
+eval :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
 eval c@(Code vs es) = case es of
   [] -> pure vs
@@ -618,7 +618,7 @@ eval c@(Code vs es) = case es of
 
 {- Functions & Constants -}
 
-invoke :: (Regioned f, MonadRef m, Monad m, Show1 f)
+invoke :: (Regioned f, MonadRef m, Show1 f)
        => IntMap (ModuleInst f m)
        -> ModuleInst f m
        -> ModuleFunc f m
@@ -649,7 +649,7 @@ invoke mods inst func vs = do
       -> [Value]
       -> EvalT (ST s) [Value] #-}
 
-invokeByName :: (Regioned f, MonadRef m, Monad m, Show1 f)
+invokeByName :: (Regioned f, MonadRef m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> Text -> [Value]
              -> EvalT m [Value]
 invokeByName mods inst name vs = do
@@ -667,7 +667,7 @@ invokeByName mods inst name vs = do
       :: IntMap (ModuleInst Identity (ST s))
       -> ModuleInst Identity (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
 
-getByName :: (Regioned f, Show1 f, MonadRef m, Monad m)
+getByName :: (Regioned f, Show1 f, MonadRef m)
           => ModuleInst f m -> Text -> EvalT m Value
 getByName inst name = case inst ^. miExports.at name of
   Just (ExternGlobal g) -> lift $ getMut (g^.Global.giContent)
@@ -677,7 +677,7 @@ getByName inst name = case inst ^. miExports.at name of
 {-# SPECIALIZE getByName
       :: ModuleInst Phrase IO -> Text -> EvalT IO Value #-}
 
-evalConst :: (Regioned f, MonadRef m, Monad m, Show1 f)
+evalConst :: (Regioned f, MonadRef m, Show1 f)
           => IntMap (ModuleInst f m)
           -> ModuleInst f m -> Expr f -> EvalT m Value
 evalConst mods inst expr = do
@@ -709,7 +709,7 @@ createHostFunc = Func.allocHost
 createHostFuncEff :: FuncType -> ([Value] -> m (Either String [Value])) -> ModuleFunc f m
 createHostFuncEff = Func.allocHostEff
 
-createTable :: (Regioned f, MonadRef m, Monad m)
+createTable :: (Regioned f, MonadRef m)
             => Table f -> EvalT m (TableInst m (ModuleFunc f m))
 createTable tab = do
   eres <- lift $ runExceptT $ Table.alloc (value tab)
@@ -725,11 +725,11 @@ liftMem at act = do
     Left err -> throwError $ EvalMemoryError at err
     Right x  -> pure x
 
-createMemory :: (Regioned f, MonadRef m, Monad m)
+createMemory :: (Regioned f, MonadRef m)
              => Memory f -> EvalT m (Memory.MemoryInst m)
 createMemory mem = liftMem (region mem) $ Memory.alloc (value mem)
 
-createGlobal :: (Regioned f, MonadRef m, Monad m, Show1 f)
+createGlobal :: (Regioned f, MonadRef m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> f (Global f)
              -> EvalT m (Global.GlobalInst m)
 createGlobal mods inst x@(value -> glob) = do
@@ -749,7 +749,7 @@ createExport inst (value -> ex) = do
     GlobalExport x -> ExternGlobal <$> global inst x
   pure $ M.singleton (ex^.exportName) ext
 
-initTable :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initTable :: (Regioned f, Show1 f, MonadRef m)
           => IntMap (ModuleInst f m) -> ModuleInst f m -> f (TableSegment f)
           -> EvalT m ()
 initTable mods inst s@(value -> seg) = do
@@ -763,7 +763,7 @@ initTable mods inst s@(value -> seg) = do
   fs <- traverse (func inst) (seg^.segmentInit)
   lift $ Table.blit tab offset (V.fromList fs)
 
-initMemory :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initMemory :: (Regioned f, Show1 f, MonadRef m)
            => IntMap (ModuleInst f m) -> ModuleInst f m -> f (MemorySegment f)
            -> EvalT m ()
 initMemory mods inst s@(value -> seg) = do
@@ -779,7 +779,7 @@ initMemory mods inst s@(value -> seg) = do
     Memory.storeBytes mem (fromIntegral offset)
                       (V.fromList (B.unpack (seg^.segmentInit)))
 
-addImport :: (Regioned f, MonadRef m, Monad m)
+addImport :: (Regioned f, MonadRef m)
           => ModuleInst f m
           -> Extern f m
           -> f (Import f)
@@ -794,7 +794,7 @@ addImport inst ext im = do
       ExternMemory mem  -> inst & miMemories %~ (mem  :)
       ExternGlobal glob -> inst & miGlobals  %~ (glob :)
 
-resolveImports :: (Regioned f, Show1 f, MonadRef m, Monad m)
+resolveImports :: (Regioned f, Show1 f, MonadRef m)
                => Map Text ModuleRef
                -> IntMap (ModuleInst f m)
                -> ModuleInst f m
@@ -817,7 +817,7 @@ resolveImports names mods inst = flip execStateT inst $
               m' <- lift $ addImport m ext im
               put m'
 
-initialize :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initialize :: (Regioned f, Show1 f, MonadRef m)
            => f (Module f)
            -> Map Text ModuleRef
            -> IntMap (ModuleInst f m)
