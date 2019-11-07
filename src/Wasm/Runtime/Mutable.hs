@@ -5,8 +5,6 @@
 
 module Wasm.Runtime.Mutable where
 
-import Data.IORef
-
 import Control.Monad.Primitive
 import Data.Primitive.MutVar
 
