@@ -290,7 +290,7 @@ step_work :: (Regioned f, MonadRef m, Show1 f)
           => Stack Value -> Region -> AdminInstr f m
           -> (Code f m -> CEvalT f m r)
           -> CEvalT f m r
-step_work vs at i k = case i of
+step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
   Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
 
   Trapping msg -> {-# SCC step_Trapping #-}
@@ -394,7 +394,7 @@ instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
       -> (Code f m -> CEvalT f m r)
       -> CEvalT f m r
-instr vs at e' k = case (unFix e', vs) of
+instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
     k $ Code vs [Trapping "unreachable executed" @@ at]
   (Nop, vs)                      -> {-# SCC step_Nop #-}
@@ -589,10 +589,10 @@ instr vs at e' k = case (unFix e', vs) of
 
 step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
-step (Code _ []) _ = error "Cannot step without instructions"
-step (Code vs (e:es)) k = do
-  -- traceM $ "step: " ++ showsPrec1 11 e ""
-  step_work vs (region e) (value e) $ k . (codeInstrs <>~ es)
+step c k = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
+    Code _ [] -> error "Cannot step without instructions"
+    Code vs (e:es) ->
+        step_work vs (region e) (value e) $ k . (codeInstrs <>~ es)
 
 {-# SPECIALIZE step
       :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
@@ -604,7 +604,7 @@ step (Code vs (e:es)) k = do
 
 eval :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
-eval c@(Code vs es) = case es of
+eval c@(Code vs es) = ReaderT $ \x -> ($ x) $ runReaderT $ case es of
   [] -> pure vs
   t@(value -> Trapping msg) : _ ->
     throwError $ EvalTrapError (region t) msg
