@@ -112,6 +112,11 @@ data Code f m = Code
   { _codeStack  :: !(Stack Value)
   , _codeInstrs :: ![f (AdminInstr f m)]
   }
+type DList a = [a] -> [a]
+data Code' f m = Code'
+  { _code'Stack  :: !(Stack Value)
+  , _code'Instrs :: !(DList (f (AdminInstr f m)))
+  }
 
 instance (Regioned f, Show1 f) => Show (Code f m) where
   showsPrec d Code {..} =
@@ -288,7 +293,7 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
 
 step_work :: (Regioned f, MonadRef m, Show1 f)
           => Stack Value -> Region -> AdminInstr f m
-          -> (Code f m -> CEvalT f m r)
+          -> (Code' f m -> CEvalT f m r)
           -> CEvalT f m r
 step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
   Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
@@ -301,34 +306,34 @@ step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
     throwError $ EvalCrashError at "undefined label"
 
   Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
-    k $ Code (vs' ++ vs) []
+    k $ Code' (vs' ++ vs) id
   Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
     case c of
       Trapping msg -> {-# SCC step_Label3 #-}
-        k $ Code vs [Trapping msg @@ region t]
+        k $ Code' vs (Trapping msg @@ region t:)
       Returning vs0 -> {-# SCC step_Label4 #-}
-        k $ Code vs [Returning vs0 @@ region t]
+        k $ Code' vs (Returning vs0 @@ region t:)
       Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
         vs0' <- lift $ takeFrom n vs0 at
-        k $ Code (vs0' ++ vs) (map plain es0)
+        k $ Code' (vs0' ++ vs) (\xs -> map plain es0 ++ xs)
       Breaking bk vs0 -> {-# SCC step_Label6 #-}
-        k $ Code vs [Breaking (bk - 1) vs0 @@ at]
+        k $ Code' vs (Breaking (bk - 1) vs0 @@ at:)
       _ -> {-# SCC step_Label7 #-} do
         step code' $ \res ->
-          k $ Code vs [Label n es0 res @@ at]
+          k $ Code' vs (Label n es0 res @@ at:)
 
   Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
-    k $ Code (vs' ++ vs) []
+    k $ Code' (vs' ++ vs) id
   Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
-    k $ Code vs [Trapping msg @@ region t]
+    k $ Code' vs (Trapping msg @@ region t:)
   Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
     vs0' <- lift $ takeFrom n vs0 at
-    k $ Code (vs0' ++ vs) []
+    k $ Code' (vs0' ++ vs) id
   Framed n frame' code' -> {-# SCC step_Framed4 #-}
     Reader.local (\c -> c & configFrame .~ frame'
                          & configBudget %~ pred) $
       step code' $ \res ->
-        k $ Code vs [Framed n frame' res @@ at]
+        k $ Code' vs (Framed n frame' res @@ at:)
 
   Invoke func -> {-# SCC step_Invoke #-} do
     budget <- view configBudget
@@ -357,14 +362,14 @@ step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
           args ++ map defaultValue (value f^.funcLocals)
         let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
             frame' = Frame inst' locals'
-        k $ Code vs' [Framed (length outs) frame' code' @@ at]
+        k $ Code' vs' (Framed (length outs) frame' code' @@ at:)
 
       Func.HostFunc _ f -> do
         -- jww (2018-11-01): Need an exception handler here, so we can
         -- report host errors.
         let res = reverse (f args)
         lift $ checkTypes at outs res
-        k $ Code (res ++ vs') []
+        k $ Code' (res ++ vs') id
         -- try (reverse (f args) ++ vs', [])
         -- with Crash (_, msg) -> EvalCrashError at msg)
 
@@ -376,104 +381,105 @@ step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
           Left err -> throwError $ EvalTrapError at err
           Right (reverse -> res) -> do
             lift $ checkTypes at outs res
-            k $ Code (res ++ vs') []
+            k $ Code' (res ++ vs') id
             -- try (reverse (f args) ++ vs', [])
             -- with Crash (_, msg) -> EvalCrashError at msg)
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Identity IO
-      -> (Code Identity IO -> CEvalT Identity IO r)
+      -> (Code' Identity IO -> CEvalT Identity IO r)
       -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Identity (ST s)
-      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> (Code' Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
 instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
-      -> (Code f m -> CEvalT f m r)
+      -> (Code' f m -> CEvalT f m r)
       -> CEvalT f m r
-instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
+instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
+  case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
-    k $ Code vs [Trapping "unreachable executed" @@ at]
+    k $ Code' vs (Trapping "unreachable executed" @@ at :)
   (Nop, vs)                      -> {-# SCC step_Nop #-}
-    k $ Code vs []
+    k $ Code' vs id
   (Block ts es', vs)             -> {-# SCC step_Block #-}
-    k $ Code vs [Label (length ts) [] (Code [] (map plain es')) @@ at]
+    k $ Code' vs (Label (length ts) [] (Code [] (map plain es')) @@ at :)
   (Loop _ es', vs)               -> {-# SCC step_Loop #-}
-    k $ Code vs [Label 0 [e' @@ at] (Code [] (map plain es')) @@ at]
+    k $ Code' vs (Label 0 [e' @@ at] (Code [] (map plain es')) @@ at :)
   (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
-    k $ Code vs' [Plain (Fix (Block ts es2)) @@ at]
+    k $ Code' vs' (Plain (Fix (Block ts es2)) @@ at :)
   (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
-    k $ Code vs' [Plain (Fix (Block ts es1)) @@ at]
+    k $ Code' vs' (Plain (Fix (Block ts es1)) @@ at :)
   (Br x, vs)                     -> {-# SCC step_Br #-}
-    k $ Code [] [Breaking (value x) vs @@ at]
+    k $ Code' [] (Breaking (value x) vs @@ at :)
   (BrIf _, I32 0 : vs')          -> {-# SCC step_BrIf1 #-}
-    k $ Code vs' []
+    k $ Code' vs' id
   (BrIf x, I32 _ : vs')          -> {-# SCC step_BrIf2 #-}
-    k $ Code vs' [Plain (Fix (Br x)) @@ at]
+    k $ Code' vs' (Plain (Fix (Br x)) @@ at:)
   (BrTable xs x, I32 i : vs')
     | i < 0 || fromIntegral i >= length xs -> {-# SCC step_BrTable1 #-}
-      k $ Code vs' [Plain (Fix (Br x)) @@ at]
+      k $ Code' vs' (Plain (Fix (Br x)) @@ at:)
     | otherwise -> {-# SCC step_BrTable2 #-}
-      k $ Code vs' [Plain (Fix (Br (xs !! fromIntegral i))) @@ at]
+      k $ Code' vs' (Plain (Fix (Br (xs !! fromIntegral i))) @@ at:)
   (Return, vs)                   -> {-# SCC step_Return #-}
-    k $ Code vs [Returning vs @@ at]
+    k $ Code' vs (Returning vs @@ at:)
 
   (Call x, vs) -> {-# SCC step_Call #-} do
     inst <- getFrameInst
     -- traceM $ "Call " ++ show (value x)
     f <- lift $ func inst x
-    k $ Code vs [Invoke f @@ at]
+    k $ Code' vs (Invoke f @@ at:)
 
   (CallIndirect x, I32 i : vs) -> {-# SCC step_CallIndirect #-} do
     inst <- getFrameInst
     func <- lift $ funcElem inst (0 @@ at) i at
     t <- lift $ type_ inst x
-    k $ Code vs $
+    k $ Code' vs $
       if t /= Func.typeOf func
-      then [Trapping "indirect call type mismatch" @@ at]
-      else [Invoke func @@ at]
+      then (Trapping "indirect call type mismatch" @@ at:)
+      else (Invoke func @@ at:)
 
   (Drop, _ : vs') -> {-# SCC step_Drop #-}
-    k $ Code vs' []
+    k $ Code' vs' id
 
   (Select, I32 0 : v2 : _ : vs') -> {-# SCC step_Select1 #-}
-    k $ Code (v2 : vs') []
+    k $ Code' (v2 : vs') id
   (Select, I32 _ : _ : v1 : vs') -> {-# SCC step_Select2 #-}
-    k $ Code (v1 : vs') []
+    k $ Code' (v1 : vs') id
 
   (GetLocal x, vs) -> {-# SCC step_GetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     l <- lift $ lift $ getMut mut
-    k $ Code (l : vs) []
+    k $ Code' (l : vs) id
 
   (SetLocal x, v : vs') -> {-# SCC step_SetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     lift $ lift $ setMut mut v
-    k $ Code vs' []
+    k $ Code' vs' id
 
   (TeeLocal x, v : vs') -> {-# SCC step_TeeLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     lift $ lift $ setMut mut v
-    k $ Code (v : vs') []
+    k $ Code' (v : vs') id
 
   (GetGlobal x, vs) -> {-# SCC step_GetGlobal #-} do
     inst <- getFrameInst
     g <- lift . lift . Global.load =<< lift (global inst x)
     -- traceM $ "GetGlobal " ++ show (value x) ++ " = " ++ show g
-    k $ Code (g : vs) []
+    k $ Code' (g : vs) id
 
   (SetGlobal x, v : vs') -> {-# SCC step_SetGlobal #-} do
     inst <- getFrameInst
     g <- lift $ global inst x
     eres <- lift $ lift $ runExceptT $ Global.store g v
     case eres of
-      Right () -> k $ Code vs' []
+      Right () -> k $ Code' vs' id
       Left err -> throwError $ EvalCrashError at $ case err of
         Global.GlobalNotMutable -> "write to immutable global"
         Global.GlobalTypeError  -> "type mismatch at global write"
@@ -488,8 +494,8 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           Nothing        -> Memory.loadValue mem addr off ty
           Just (sz, ext) -> Memory.loadPacked sz ext mem addr off ty
     k $ case eres of
-      Right v' -> Code (v' : vs') []
-      Left exn -> Code vs' [Trapping (memoryErrorString exn) @@ at]
+      Right v' -> Code' (v' : vs') id
+      Left exn -> Code' vs' (Trapping (memoryErrorString exn) @@ at:)
 
   (Store op, v : I32 i : vs') -> {-# SCC step_Store #-} do
     inst <- getFrameInst
@@ -500,15 +506,15 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           Nothing -> Memory.storeValue mem addr off v
           Just sz -> Memory.storePacked sz mem addr off v
     case eres of
-      Right () -> k $ Code vs' []
+      Right () -> k $ Code' vs' id
       Left exn ->
-        k $ Code vs' [Trapping (memoryErrorString exn) @@ at]
+        k $ Code' vs' (Trapping (memoryErrorString exn) @@ at :)
 
   (MemorySize, vs) -> {-# SCC step_MemorySize #-} do
     inst <- getFrameInst
     mem  <- lift $ memory inst (0 @@ at)
     sz   <- lift $ lift $ Memory.size mem
-    k $ Code (I32 sz : vs) []
+    k $ Code' (I32 sz : vs) id
 
   (MemoryGrow, I32 delta : vs') -> {-# SCC step_MemoryGrow #-} do
     inst    <- getFrameInst
@@ -518,18 +524,18 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
     let result = case eres of
             Left _   -> -1
             Right () -> oldSize
-    k $ Code (I32 result : vs') []
+    k $ Code' (I32 result : vs') id
 
   (Const v, vs) -> {-# SCC step_Const #-}
-    k $ Code (value v : vs) []
+    k $ Code' (value v : vs) id
 
   (Test testop, v : vs') -> {-# SCC step_Test #-} do
     let eres = case testop of
           I32TestOp o -> testOp @Int32 intTestOp o v
           I64TestOp o -> testOp @Int64 intTestOp o v
     k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+      Left err -> Code' vs' (Trapping (show err) @@ at :)
+      Right v' -> Code' (v' : vs') id
 
   (Compare relop, v2 : v1 : vs') -> {-# SCC step_Compare #-} do
     let eres = case relop of
@@ -538,8 +544,8 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           F32CompareOp o -> compareOp @Float floatRelOp o v1 v2
           F64CompareOp o -> compareOp @Double floatRelOp o v1 v2
     k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+      Left err -> Code' vs' (Trapping (show err) @@ at :)
+      Right v' -> Code' (v' : vs') id
 
   (Unary unop, v : vs') -> {-# SCC step_Unary #-} do
     let eres = case unop of
@@ -548,8 +554,8 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           F32UnaryOp o -> unaryOp @Float floatUnOp o v
           F64UnaryOp o -> unaryOp @Double floatUnOp o v
     k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+      Left err -> Code' vs' (Trapping (show err) @@ at :)
+      Right v' -> Code' (v' : vs') id
 
   (Binary binop, v2 : v1 : vs') -> {-# SCC step_Binary #-} do
     let eres = case binop of
@@ -558,8 +564,8 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           F32BinaryOp o -> binaryOp @Float floatBinOp o v1 v2
           F64BinaryOp o -> binaryOp @Double floatBinOp o v1 v2
     k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+      Left err -> Code' vs' (Trapping (show err) @@ at :)
+      Right v' -> Code' (v' : vs') id
 
   (Convert cvtop, v : vs') -> {-# SCC step_Convert #-} do
     let eres = case cvtop of
@@ -568,8 +574,8 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
           F32ConvertOp o -> floatCvtOp @Float o v
           F64ConvertOp o -> floatCvtOp @Double o v
     k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+      Left err -> Code' vs' (Trapping (show err) @@ at :)
+      Right v' -> Code' (v' : vs') id
 
   _ ->  {-# SCC step_fallthrough_ #-} do
     let s1 = show (reverse vs)
@@ -579,20 +585,21 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
 
 {-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Identity
-      -> (Code Identity IO -> CEvalT Identity IO r)
+      -> (Code' Identity IO -> CEvalT Identity IO r)
       -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Identity
-      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> (Code' Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
 step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
 step c k = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
     Code _ [] -> error "Cannot step without instructions"
-    Code vs (e:es) ->
-        step_work vs (region e) (value e) $ k . (codeInstrs <>~ es)
+    Code vs (e:es) -> do
+        step_work vs (region e) (value e) $ \(Code' vs es') ->
+            {-# SCC step_k #-} k ({-# SCC step_k_arg #-} (Code vs (es' es)))
 
 {-# SPECIALIZE step
       :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
