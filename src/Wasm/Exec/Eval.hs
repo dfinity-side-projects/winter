@@ -22,6 +22,8 @@ import           Control.Monad.Except
 import           Control.Monad.Trans.Reader hiding (local)
 import qualified Control.Monad.Trans.Reader as Reader
 import           Control.Monad.Trans.State
+import           Control.Monad.Identity
+import           Control.Monad.ST (ST)
 import qualified Data.ByteString.Lazy as B
 import           Data.Default.Class (Default(..))
 import           Data.Fix
@@ -383,6 +385,11 @@ step_work vs at i k = case i of
       -> (Code Phrase IO -> CEvalT Phrase IO r)
       -> CEvalT Phrase IO r #-}
 
+{-# SPECIALIZE step_work
+      :: Stack Value -> Region -> AdminInstr Identity (ST s)
+      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> CEvalT Identity (ST s) r #-}
+
 instr :: (Regioned f, {-Show1 f,-} MonadRef m, Monad m)
       => Stack Value -> Region -> Instr f
       -> (Code f m -> CEvalT f m r)
@@ -575,6 +582,11 @@ instr vs at e' k = case (unFix e', vs) of
       -> (Code Phrase IO -> CEvalT Phrase IO r)
       -> CEvalT Phrase IO r #-}
 
+{-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Identity
+      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> CEvalT Identity (ST s) r #-}
+
 step :: (Regioned f, MonadRef m, Monad m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
 step (Code _ []) _ = error "Cannot step without instructions"
@@ -586,6 +598,10 @@ step (Code vs (e:es)) k = do
       :: Code Phrase IO -> (Code Phrase IO -> CEvalT Phrase IO r)
       -> CEvalT Phrase IO r #-}
 
+{-# SPECIALIZE step
+      :: Code Identity (ST s) -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> CEvalT Identity (ST s) r #-}
+
 eval :: (Regioned f, MonadRef m, Monad m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
 eval c@(Code vs es) = case es of
@@ -596,6 +612,9 @@ eval c@(Code vs es) = case es of
 
 {-# SPECIALIZE eval
       :: Code Phrase IO -> CEvalT Phrase IO (Stack Value) #-}
+
+{-# SPECIALIZE eval
+      :: Code Identity (ST s) -> CEvalT Identity (ST s) (Stack Value) #-}
 
 {- Functions & Constants -}
 
@@ -623,6 +642,13 @@ invoke mods inst func vs = do
       -> [Value]
       -> EvalT IO [Value] #-}
 
+{-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Identity (ST s))
+      -> ModuleInst Identity (ST s)
+      -> ModuleFunc Identity (ST s)
+      -> [Value]
+      -> EvalT (ST s) [Value] #-}
+
 invokeByName :: (Regioned f, MonadRef m, Monad m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> Text -> [Value]
              -> EvalT m [Value]
@@ -636,6 +662,10 @@ invokeByName mods inst name vs = do
 {-# SPECIALIZE invokeByName
       :: IntMap (ModuleInst Phrase IO)
       -> ModuleInst Phrase IO -> Text -> [Value] -> EvalT IO [Value] #-}
+
+{-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Identity (ST s))
+      -> ModuleInst Identity (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
 
 getByName :: (Regioned f, Show1 f, MonadRef m, Monad m)
           => ModuleInst f m -> Text -> EvalT m Value
@@ -821,6 +851,12 @@ initialize (value -> mod) names mods = do
       lift $ invoke (IM.insert ref inst3 mods) inst3 f []
 
   pure (ref, inst')
+
+{-# SPECIALIZE initialize
+           :: Phrase (Module Phrase)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Phrase IO)
+           -> EvalT IO (ModuleRef, ModuleInst Phrase IO) #-}
 
 nextKey :: IntMap a -> IM.Key
 nextKey m = go (max 1 (IM.size m))
