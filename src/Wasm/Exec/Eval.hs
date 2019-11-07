@@ -14,6 +14,8 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
 
+{- # OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-unfoldings -dsuppress-module-prefixes #-}
+
 module Wasm.Exec.Eval where
 
 import           Control.Exception
@@ -132,7 +134,7 @@ data AdminInstr f m
   | Trapping !String
   | Returning !(Stack Value)
   | Breaking !Int !(Stack Value)
-  | Label !Int ![f (Instr f)] !(Code f m)
+  | Label !Int !(DList (f (AdminInstr f m))) !(Code f m)
   | Framed !Int !(Frame f m) !(Code f m)
 
 instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
@@ -146,7 +148,7 @@ instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
                                            . showsPrec1 11 s
     Label i l c  -> showString "Label "     . showsPrec 11 i
                                            . showString " "
-                                           . showListWith (showsPrec1 11) l
+                                           . showListWith (showsPrec1 11) (l [])
                                            . showString " "
                                            . showsPrec 11 c
     Framed i f c -> showString "Framed "    . showsPrec 11 i
@@ -315,7 +317,7 @@ step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
         k $ Code' vs (Returning vs0 @@ region t:)
       Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
         vs0' <- lift $ takeFrom n vs0 at
-        k $ Code' (vs0' ++ vs) (\xs -> map plain es0 ++ xs)
+        k $ Code' (vs0' ++ vs) es0
       Breaking bk vs0 -> {-# SCC step_Label6 #-}
         k $ Code' vs (Breaking (bk - 1) vs0 @@ at:)
       _ -> {-# SCC step_Label7 #-} do
@@ -406,9 +408,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
   (Nop, vs)                      -> {-# SCC step_Nop #-}
     k $ Code' vs id
   (Block ts es', vs)             -> {-# SCC step_Block #-}
-    k $ Code' vs (Label (length ts) [] (Code [] (map plain es')) @@ at :)
+    k $ Code' vs (Label (length ts) id (Code [] (map plain es')) @@ at :)
   (Loop _ es', vs)               -> {-# SCC step_Loop #-}
-    k $ Code' vs (Label 0 [e' @@ at] (Code [] (map plain es')) @@ at :)
+    k $ Code' vs (Label 0 ((plain $ e' @@ at):) (Code [] (map plain es')) @@ at :)
   (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
     k $ Code' vs' (Plain (Fix (Block ts es2)) @@ at :)
   (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
