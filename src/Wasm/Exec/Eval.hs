@@ -120,11 +120,6 @@ data Code f m = Code
   { _codeStack  :: !(Stack Value)
   , _codeInstrs :: ![f (AdminInstr f m)]
   }
-type DList a = [a] -> [a]
-data Code' f m = Code'
-  { _code'Stack  :: !(Stack Value)
-  , _code'Instrs :: !(DList (f (AdminInstr f m)))
-  }
 
 instance (Regioned f, Show1 f) => Show (Code f m) where
   showsPrec d Code {..} =
@@ -134,6 +129,7 @@ instance (Regioned f, Show1 f) => Show (Code f m) where
       . showString " "
       . showListWith (showsPrec1 11) _codeInstrs
 
+type DList a = [a] -> [a]
 data AdminInstr f m
   = Plain !(Instr f)
   | Invoke !(ModuleFunc f m)
@@ -282,92 +278,93 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
  *   c : config
  -}
 
+type EvalCont f m r = Stack Value -> DList (f (AdminInstr f m)) -> CEvalT f m r
 
 instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
-      -> (Code' f m -> CEvalT f m r)
+      -> EvalCont f m r
       -> CEvalT f m r
 instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
   case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
-    k $ Code' vs (Trapping "unreachable executed" @@ at :)
+    k vs (Trapping "unreachable executed" @@ at :)
   (Nop, vs)                      -> {-# SCC step_Nop #-}
-    k $ Code' vs id
+    k vs id
   (Block ts es', vs)             -> {-# SCC step_Block #-}
-    k $ Code' vs (Label (length ts) id (Code [] (map plain es')) @@ at :)
+    k vs (Label (length ts) id (Code [] (map plain es')) @@ at :)
   (Loop _ es', vs)               -> {-# SCC step_Loop #-}
-    k $ Code' vs (Label 0 ((plain $ e' @@ at):) (Code [] (map plain es')) @@ at :)
+    k vs (Label 0 ((plain $ e' @@ at):) (Code [] (map plain es')) @@ at :)
   (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
-    k $ Code' vs' (Plain (Fix (Block ts es2)) @@ at :)
+    k vs' (Plain (Fix (Block ts es2)) @@ at :)
   (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
-    k $ Code' vs' (Plain (Fix (Block ts es1)) @@ at :)
+    k vs' (Plain (Fix (Block ts es1)) @@ at :)
   (Br x, vs)                     -> {-# SCC step_Br #-}
-    k $ Code' [] (Breaking (value x) vs @@ at :)
+    k [] (Breaking (value x) vs @@ at :)
   (BrIf _, I32 0 : vs')          -> {-# SCC step_BrIf1 #-}
-    k $ Code' vs' id
+    k vs' id
   (BrIf x, I32 _ : vs')          -> {-# SCC step_BrIf2 #-}
-    k $ Code' vs' (Plain (Fix (Br x)) @@ at:)
+    k vs' (Plain (Fix (Br x)) @@ at:)
   (BrTable xs x, I32 i : vs')
     | i < 0 || fromIntegral i >= length xs -> {-# SCC step_BrTable1 #-}
-      k $ Code' vs' (Plain (Fix (Br x)) @@ at:)
+      k vs' (Plain (Fix (Br x)) @@ at:)
     | otherwise -> {-# SCC step_BrTable2 #-}
-      k $ Code' vs' (Plain (Fix (Br (xs !! fromIntegral i))) @@ at:)
+      k vs' (Plain (Fix (Br (xs !! fromIntegral i))) @@ at:)
   (Return, vs)                   -> {-# SCC step_Return #-}
-    k $ Code' vs (Returning vs @@ at:)
+    k vs (Returning vs @@ at:)
 
   (Call x, vs) -> {-# SCC step_Call #-} do
     inst <- getFrameInst
     -- traceM $ "Call " ++ show (value x)
     f <- lift $ func inst x
-    k $ Code' vs (Invoke f @@ at:)
+    k vs (Invoke f @@ at:)
 
   (CallIndirect x, I32 i : vs) -> {-# SCC step_CallIndirect #-} do
     inst <- getFrameInst
     func <- lift $ funcElem inst (0 @@ at) i at
     t <- lift $ type_ inst x
-    k $ Code' vs $
+    k vs $
       if t /= Func.typeOf func
       then (Trapping "indirect call type mismatch" @@ at:)
       else (Invoke func @@ at:)
 
   (Drop, _ : vs') -> {-# SCC step_Drop #-}
-    k $ Code' vs' id
+    k vs' id
 
   (Select, I32 0 : v2 : _ : vs') -> {-# SCC step_Select1 #-}
-    k $ Code' (v2 : vs') id
+    k (v2 : vs') id
   (Select, I32 _ : _ : v1 : vs') -> {-# SCC step_Select2 #-}
-    k $ Code' (v1 : vs') id
+    k (v1 : vs') id
 
   (GetLocal x, vs) -> {-# SCC step_GetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     l <- lift $ lift $ getMut mut
-    k $ Code' (l : vs) id
+    k (l : vs) id
 
   (SetLocal x, v : vs') -> {-# SCC step_SetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     lift $ lift $ setMut mut v
-    k $ Code' vs' id
+    k vs' id
 
   (TeeLocal x, v : vs') -> {-# SCC step_TeeLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
     lift $ lift $ setMut mut v
-    k $ Code' (v : vs') id
+    k (v : vs') id
 
   (GetGlobal x, vs) -> {-# SCC step_GetGlobal #-} do
     inst <- getFrameInst
     g <- lift . lift . Global.load =<< lift (global inst x)
     -- traceM $ "GetGlobal " ++ show (value x) ++ " = " ++ show g
-    k $ Code' (g : vs) id
+    k (g : vs) id
 
   (SetGlobal x, v : vs') -> {-# SCC step_SetGlobal #-} do
     inst <- getFrameInst
     g <- lift $ global inst x
     eres <- lift $ lift $ runExceptT $ Global.store g v
     case eres of
-      Right () -> k $ Code' vs' id
+      Right () -> k vs' id
       Left err -> throwError $ EvalCrashError at $ case err of
         Global.GlobalNotMutable -> "write to immutable global"
         Global.GlobalTypeError  -> "type mismatch at global write"
@@ -381,9 +378,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
     eres <- lift $ lift $ runExceptT $ case op^.memorySize of
           Nothing        -> Memory.loadValue mem addr off ty
           Just (sz, ext) -> Memory.loadPacked sz ext mem addr off ty
-    k $ case eres of
-      Right v' -> Code' (v' : vs') id
-      Left exn -> Code' vs' (Trapping (memoryErrorString exn) @@ at:)
+    case eres of
+      Right v' -> k (v' : vs') id
+      Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at:)
 
   (Store op, v : I32 i : vs') -> {-# SCC step_Store #-} do
     inst <- getFrameInst
@@ -394,15 +391,14 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
           Nothing -> Memory.storeValue mem addr off v
           Just sz -> Memory.storePacked sz mem addr off v
     case eres of
-      Right () -> k $ Code' vs' id
-      Left exn ->
-        k $ Code' vs' (Trapping (memoryErrorString exn) @@ at :)
+      Right () -> k vs' id
+      Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at :)
 
   (MemorySize, vs) -> {-# SCC step_MemorySize #-} do
     inst <- getFrameInst
     mem  <- lift $ memory inst (0 @@ at)
     sz   <- lift $ lift $ Memory.size mem
-    k $ Code' (I32 sz : vs) id
+    k (I32 sz : vs) id
 
   (MemoryGrow, I32 delta : vs') -> {-# SCC step_MemoryGrow #-} do
     inst    <- getFrameInst
@@ -412,18 +408,18 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
     let result = case eres of
             Left _   -> -1
             Right () -> oldSize
-    k $ Code' (I32 result : vs') id
+    k (I32 result : vs') id
 
   (Const v, vs) -> {-# SCC step_Const #-}
-    k $ Code' (value v : vs) id
+    k (value v : vs) id
 
   (Test testop, v : vs') -> {-# SCC step_Test #-} do
     let eres = case testop of
           I32TestOp o -> testOp @Int32 intTestOp o v
           I64TestOp o -> testOp @Int64 intTestOp o v
-    k $ case eres of
-      Left err -> Code' vs' (Trapping (show err) @@ at :)
-      Right v' -> Code' (v' : vs') id
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Compare relop, v2 : v1 : vs') -> {-# SCC step_Compare #-} do
     let eres = case relop of
@@ -431,9 +427,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
           I64CompareOp o -> compareOp @Int64 intRelOp o v1 v2
           F32CompareOp o -> compareOp @Float floatRelOp o v1 v2
           F64CompareOp o -> compareOp @Double floatRelOp o v1 v2
-    k $ case eres of
-      Left err -> Code' vs' (Trapping (show err) @@ at :)
-      Right v' -> Code' (v' : vs') id
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Unary unop, v : vs') -> {-# SCC step_Unary #-} do
     let eres = case unop of
@@ -441,9 +437,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
           I64UnaryOp o -> unaryOp @Int64 intUnOp o v
           F32UnaryOp o -> unaryOp @Float floatUnOp o v
           F64UnaryOp o -> unaryOp @Double floatUnOp o v
-    k $ case eres of
-      Left err -> Code' vs' (Trapping (show err) @@ at :)
-      Right v' -> Code' (v' : vs') id
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Binary binop, v2 : v1 : vs') -> {-# SCC step_Binary #-} do
     let eres = case binop of
@@ -451,9 +447,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
           I64BinaryOp o -> binaryOp @Int64 intBinOp o v1 v2
           F32BinaryOp o -> binaryOp @Float floatBinOp o v1 v2
           F64BinaryOp o -> binaryOp @Double floatBinOp o v1 v2
-    k $ case eres of
-      Left err -> Code' vs' (Trapping (show err) @@ at :)
-      Right v' -> Code' (v' : vs') id
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Convert cvtop, v : vs') -> {-# SCC step_Convert #-} do
     let eres = case cvtop of
@@ -461,9 +457,9 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
           I64ConvertOp o -> intCvtOp @Int64 o v
           F32ConvertOp o -> floatCvtOp @Float o v
           F64ConvertOp o -> floatCvtOp @Double o v
-    k $ case eres of
-      Left err -> Code' vs' (Trapping (show err) @@ at :)
-      Right v' -> Code' (v' : vs') id
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   _ ->  {-# SCC step_fallthrough_ #-} do
     let s1 = show (reverse vs)
@@ -473,12 +469,12 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
 
 {-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Identity
-      -> (Code' Identity IO -> CEvalT Identity IO r)
+      -> (EvalCont Identity IO r)
       -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Identity
-      -> (Code' Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> (EvalCont Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
 step :: (Regioned f, MonadRef m, Show1 f)
@@ -487,7 +483,7 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
   Code _ [] -> error "Cannot step without instructions"
   Code vs (e:es) ->
     let at = region e
-        k (Code' vs es') = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es)))
+        k vs es' = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es)))
     in case value e of
       Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
 
@@ -499,34 +495,34 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
         throwError $ EvalCrashError at "undefined label"
 
       Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
-        k $ Code' (vs' ++ vs) id
+        k (vs' ++ vs) id
       Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
         case c of
           Trapping msg -> {-# SCC step_Label3 #-}
-            k $ Code' vs (Trapping msg @@ region t:)
+            k vs (Trapping msg @@ region t:)
           Returning vs0 -> {-# SCC step_Label4 #-}
-            k $ Code' vs (Returning vs0 @@ region t:)
+            k vs (Returning vs0 @@ region t:)
           Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
             vs0' <- lift $ takeFrom n vs0 at
-            k $ Code' (vs0' ++ vs) es0
+            k (vs0' ++ vs) es0
           Breaking bk vs0 -> {-# SCC step_Label6 #-}
-            k $ Code' vs (Breaking (bk - 1) vs0 @@ at:)
+            k vs (Breaking (bk - 1) vs0 @@ at:)
           _ -> {-# SCC step_Label7 #-} do
             step code' $ \res ->
-              k $ Code' vs (Label n es0 res @@ at:)
+              k vs (Label n es0 res @@ at:)
 
       Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
-        k $ Code' (vs' ++ vs) id
+        k (vs' ++ vs) id
       Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
-        k $ Code' vs (Trapping msg @@ region t:)
+        k vs (Trapping msg @@ region t:)
       Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
         vs0' <- lift $ takeFrom n vs0 at
-        k $ Code' (vs0' ++ vs) id
+        k (vs0' ++ vs) id
       Framed n frame' code' -> {-# SCC step_Framed4 #-}
         Reader.local (\c -> c & configFrame .~ frame'
                              & configBudget %~ pred) $
           step code' $ \res ->
-            k $ Code' vs (Framed n frame' res @@ at:)
+            k vs (Framed n frame' res @@ at:)
 
       Invoke func -> {-# SCC step_Invoke #-} do
         budget <- view configBudget
@@ -555,14 +551,14 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
               args ++ map defaultValue (value f^.funcLocals)
             let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
                 frame' = Frame inst' locals'
-            k $ Code' vs' (Framed (length outs) frame' code' @@ at:)
+            k vs' (Framed (length outs) frame' code' @@ at:)
 
           Func.HostFunc _ f -> do
             -- jww (2018-11-01): Need an exception handler here, so we can
             -- report host errors.
             let res = reverse (f args)
             lift $ checkTypes at outs res
-            k $ Code' (res ++ vs') id
+            k (res ++ vs') id
             -- try (reverse (f args) ++ vs', [])
             -- with Crash (_, msg) -> EvalCrashError at msg)
 
@@ -574,7 +570,7 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
               Left err -> throwError $ EvalTrapError at err
               Right (reverse -> res) -> do
                 lift $ checkTypes at outs res
-                k $ Code' (res ++ vs') id
+                k (res ++ vs') id
                 -- try (reverse (f args) ++ vs', [])
                 -- with Crash (_, msg) -> EvalCrashError at msg)
 
