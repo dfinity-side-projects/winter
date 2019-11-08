@@ -280,11 +280,15 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
 
 type EvalCont f m r = Stack Value -> DList (f (AdminInstr f m)) -> CEvalT f m r
 
+etaReaderT :: ReaderT r m a -> ReaderT r m a
+etaReaderT f = ReaderT $ \x -> ($ x) $ runReaderT f
+{-# INLINE etaReaderT #-}
+
 instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
       -> EvalCont f m r
       -> CEvalT f m r
-instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
+instr vs at e' k = etaReaderT $ case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
     k vs (Trapping "unreachable executed" @@ at :)
   (Nop, vs)                      -> {-# SCC step_Nop #-}
@@ -478,7 +482,7 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
 
 step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
-step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
+step c k' = etaReaderT $ case c of
   Code _ [] -> error "Cannot step without instructions"
   Code vs (e:es) ->
     let at = region e
@@ -583,7 +587,7 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
 
 eval :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
-eval c@(Code vs es) = ReaderT $ \x -> ($ x) $ runReaderT $ case es of
+eval c@(Code vs es) = etaReaderT $ {-# SCC eval #-} case es of
   [] -> pure vs
   t@(value -> Trapping msg) : _ ->
     throwError $ EvalTrapError (region t) msg
