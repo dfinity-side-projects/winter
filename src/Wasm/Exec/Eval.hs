@@ -284,8 +284,7 @@ instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
       -> EvalCont f m r
       -> CEvalT f m r
-instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
-  case (unFix e', vs) of
+instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $ case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
     k vs (Trapping "unreachable executed" @@ at :)
   (Nop, vs)                      -> {-# SCC step_Nop #-}
