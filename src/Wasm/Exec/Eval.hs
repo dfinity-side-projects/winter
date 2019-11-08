@@ -16,7 +16,13 @@
 
 {- # OPTIONS_GHC -ddump-simpl -dsuppress-coercions -dsuppress-unfoldings -dsuppress-module-prefixes #-}
 
-module Wasm.Exec.Eval where
+module Wasm.Exec.Eval
+  ( initialize
+  , invokeByName
+  , getByName
+  , createHostFunc
+  , createHostFuncEff
+  ) where
 
 import           Control.Exception
 import           Control.Monad
@@ -157,8 +163,6 @@ instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
                                            . showString " "
                                            . showsPrec 11 c
 
-makeLenses ''Code
-
 data Config f m = Config
   { _configModules :: !(IntMap (ModuleInst f m))
   , _configFrame   :: !(Frame f m)
@@ -199,14 +203,6 @@ lookup category inst l x@(value -> x') =
   then pure $ inst^?!l.ix (fromIntegral x')
   else throwError $
     EvalCrashError (region x) ("undefined " <> category <> " " <> show x')
-
-assignment :: (Regioned f, Monad m)
-           => String -> s -> Lens' s [a] -> Var f -> a -> EvalT m s
-assignment category inst l x@(value -> x') v =
-  if fromIntegral x' < length (inst^.l)
-  then pure $ inst & l.ix (fromIntegral (value x)) .~ v
-  else throwError $
-    EvalCrashError (region x) ("cannot assign " <> category <> " " <> show x')
 
 type_ :: (Regioned f, Monad m)
       => ModuleInst f m -> Var f -> EvalT m FuncType
@@ -255,13 +251,6 @@ takeFrom n vs at' =
   if n > length vs
   then throwError $ EvalCrashError at' "stack underflow"
   else pure $ take n vs
-
-dropFrom :: Monad m
-         => Int -> Stack a -> Region -> EvalT m (Stack a)
-dropFrom n vs at' =
-  if n > length vs
-  then throwError $ EvalCrashError at' "stack underflow"
-  else pure $ drop n vs
 
 partialZip :: [a] -> [b] -> [Either a (Either b (a, b))]
 partialZip [] [] = []
