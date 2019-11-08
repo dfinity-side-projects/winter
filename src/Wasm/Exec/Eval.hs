@@ -284,9 +284,12 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
 
 step_work :: (Regioned f, MonadRef m, Show1 f)
           => Stack Value -> Region -> AdminInstr f m
-          -> (Code' f m -> CEvalT f m r)
+          -> [f (AdminInstr f m)]
+          -> (Code f m -> CEvalT f m r)
           -> CEvalT f m r
-step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
+step_work vs at i es k' = ReaderT $ \x -> ($ x) $ runReaderT $
+  let k (Code' vs es') = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es))) in
+  case i of
   Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
 
   Trapping msg -> {-# SCC step_Trapping #-}
@@ -378,12 +381,14 @@ step_work vs at i k = ReaderT $ \x -> ($ x) $ runReaderT $ case i of
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Identity IO
-      -> (Code' Identity IO -> CEvalT Identity IO r)
+      -> [Identity (AdminInstr Identity IO)]
+      -> (Code Identity IO -> CEvalT Identity IO r)
       -> CEvalT Identity IO r #-}
 
 {-# SPECIALIZE step_work
       :: Stack Value -> Region -> AdminInstr Identity (ST s)
-      -> (Code' Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> [Identity (AdminInstr Identity (ST s))]
+      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
 instr :: (Regioned f, {-Show1 f,-} MonadRef m)
@@ -588,9 +593,7 @@ step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
 step c k = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
     Code _ [] -> error "Cannot step without instructions"
-    Code vs (e:es) -> do
-        step_work vs (region e) (value e) $ \(Code' vs es') ->
-            {-# SCC step_k #-} k ({-# SCC step_k_arg #-} (Code vs (es' es)))
+    Code vs (e:es) -> step_work vs (region e) (value e) es k
 
 {-# SPECIALIZE step
       :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
