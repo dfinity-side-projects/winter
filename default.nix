@@ -21,19 +21,13 @@ let
 
 haskellPackages = pkgs.haskell.packages.${compiler};
 
-wasm = pkgs.ocamlPackages.wasm.overrideAttrs (attrs: {
-  src = pkgs.fetchFromGitHub {
+wasm-src = pkgs.fetchFromGitHub {
     owner  = "WebAssembly";
     repo   = "spec";
     rev    = "a56cf2ec042da382f0196fe14dcbd7ff2e973466";
     sha256 = "02c7bpmjmq3bxp4w0g8gkg87ixh4x67d9hz4g25i4snxnc7bj0g7";
     # date = 2018-10-31T18:30:05+01:00;
   };
-  postInstall = attrs.postInstall + ''
-    mkdir -p $out/test
-    cp -pR test/core $out/test
-  '';
-});
 
 drv = haskellPackages.developPackage {
   name = "winter";
@@ -46,15 +40,16 @@ drv = haskellPackages.developPackage {
 
   modifier = drv: pkgs.haskell.lib.overrideCabal drv (attrs: {
     buildTools = (attrs.buildTools or []) ++ [
-      pkgs.wabt wasm
+      pkgs.wabt
     ];
 
     passthru = {
       nixpkgs = pkgs;
     };
+
   });
 
   inherit returnShellEnv;
 };
 
-in drv
+in drv.overrideAttrs(old: { WASM_SPEC_TESTS = "${wasm-src}/test/core"; })
