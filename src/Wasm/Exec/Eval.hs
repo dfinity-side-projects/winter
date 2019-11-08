@@ -482,7 +482,7 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
   Code _ [] -> error "Cannot step without instructions"
   Code vs (e:es) ->
     let at = region e
-        k vs es' = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es)))
+        k vs es' = k' (Code vs (es' es))
     in case value e of
       Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
 
@@ -507,7 +507,7 @@ step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
           Breaking bk vs0 -> {-# SCC step_Label6 #-}
             k vs (Breaking (bk - 1) vs0 @@ at:)
           _ -> {-# SCC step_Label7 #-} do
-            step code' $ \res ->
+            step code' $ \res -> {-# SCC step_Label7_k #-} do
               k vs (Label n es0 res @@ at:)
 
       Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
