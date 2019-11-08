@@ -282,114 +282,6 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
  *   c : config
  -}
 
-step_work :: (Regioned f, MonadRef m, Show1 f)
-          => Stack Value -> Region -> AdminInstr f m
-          -> [f (AdminInstr f m)]
-          -> (Code f m -> CEvalT f m r)
-          -> CEvalT f m r
-step_work vs at i es k' = ReaderT $ \x -> ($ x) $ runReaderT $
-  let k (Code' vs es') = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es))) in
-  case i of
-  Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
-
-  Trapping msg -> {-# SCC step_Trapping #-}
-    throwError $ EvalTrapError at msg
-  Returning _  -> {-# SCC step_Returning #-}
-    throwError $ EvalCrashError at "undefined frame"
-  Breaking _ _ -> {-# SCC step_Breaking #-}
-    throwError $ EvalCrashError at "undefined label"
-
-  Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
-    k $ Code' (vs' ++ vs) id
-  Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
-    case c of
-      Trapping msg -> {-# SCC step_Label3 #-}
-        k $ Code' vs (Trapping msg @@ region t:)
-      Returning vs0 -> {-# SCC step_Label4 #-}
-        k $ Code' vs (Returning vs0 @@ region t:)
-      Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
-        vs0' <- lift $ takeFrom n vs0 at
-        k $ Code' (vs0' ++ vs) es0
-      Breaking bk vs0 -> {-# SCC step_Label6 #-}
-        k $ Code' vs (Breaking (bk - 1) vs0 @@ at:)
-      _ -> {-# SCC step_Label7 #-} do
-        step code' $ \res ->
-          k $ Code' vs (Label n es0 res @@ at:)
-
-  Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
-    k $ Code' (vs' ++ vs) id
-  Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
-    k $ Code' vs (Trapping msg @@ region t:)
-  Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
-    vs0' <- lift $ takeFrom n vs0 at
-    k $ Code' (vs0' ++ vs) id
-  Framed n frame' code' -> {-# SCC step_Framed4 #-}
-    Reader.local (\c -> c & configFrame .~ frame'
-                         & configBudget %~ pred) $
-      step code' $ \res ->
-        k $ Code' vs (Framed n frame' res @@ at:)
-
-  Invoke func -> {-# SCC step_Invoke #-} do
-    budget <- view configBudget
-    when (budget == 0) $
-      throwError $ EvalExhaustionError at "call stack exhausted"
-
-    let FuncType ins outs = Func.typeOf func
-        n = length ins
-
-    (reverse -> args, vs') <-
-      if n > length vs
-      then throwError $ EvalCrashError at "stack underflow"
-      else pure $ splitAt n vs
-
-    -- traceM $ "Invoke: ins  = " ++ show ins
-    -- traceM $ "Invoke: args = " ++ show args
-    -- traceM $ "Invoke: outs = " ++ show outs
-    -- traceM $ "Invoke: vs'  = " ++ show vs'
-
-    lift $ checkTypes at ins args
-
-    case func of
-      Func.AstFunc _ ref f -> do
-        inst' <- getInst ref
-        locals' <- lift $ lift $ traverse newMut $
-          args ++ map defaultValue (value f^.funcLocals)
-        let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
-            frame' = Frame inst' locals'
-        k $ Code' vs' (Framed (length outs) frame' code' @@ at:)
-
-      Func.HostFunc _ f -> do
-        -- jww (2018-11-01): Need an exception handler here, so we can
-        -- report host errors.
-        let res = reverse (f args)
-        lift $ checkTypes at outs res
-        k $ Code' (res ++ vs') id
-        -- try (reverse (f args) ++ vs', [])
-        -- with Crash (_, msg) -> EvalCrashError at msg)
-
-      Func.HostFuncEff _ f -> do
-        -- jww (2018-11-01): Need an exception handler here, so we can
-        -- report host errors.
-        res' <- lift $ lift $ f args
-        case res' of
-          Left err -> throwError $ EvalTrapError at err
-          Right (reverse -> res) -> do
-            lift $ checkTypes at outs res
-            k $ Code' (res ++ vs') id
-            -- try (reverse (f args) ++ vs', [])
-            -- with Crash (_, msg) -> EvalCrashError at msg)
-
-{-# SPECIALIZE step_work
-      :: Stack Value -> Region -> AdminInstr Identity IO
-      -> [Identity (AdminInstr Identity IO)]
-      -> (Code Identity IO -> CEvalT Identity IO r)
-      -> CEvalT Identity IO r #-}
-
-{-# SPECIALIZE step_work
-      :: Stack Value -> Region -> AdminInstr Identity (ST s)
-      -> [Identity (AdminInstr Identity (ST s))]
-      -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
-      -> CEvalT Identity (ST s) r #-}
 
 instr :: (Regioned f, {-Show1 f,-} MonadRef m)
       => Stack Value -> Region -> Instr f
@@ -591,9 +483,100 @@ instr vs at e' k = ReaderT $ \x -> ($ x) $ runReaderT $
 
 step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
-step c k = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
-    Code _ [] -> error "Cannot step without instructions"
-    Code vs (e:es) -> step_work vs (region e) (value e) es k
+step c k' = ReaderT $ \x -> ($ x) $ runReaderT $ case c of
+  Code _ [] -> error "Cannot step without instructions"
+  Code vs (e:es) ->
+    let at = region e
+        k (Code' vs es') = {-# SCC step_k #-} k' ({-# SCC step_k_arg #-} (Code vs (es' es)))
+    in case value e of
+      Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
+
+      Trapping msg -> {-# SCC step_Trapping #-}
+        throwError $ EvalTrapError at msg
+      Returning _  -> {-# SCC step_Returning #-}
+        throwError $ EvalCrashError at "undefined frame"
+      Breaking _ _ -> {-# SCC step_Breaking #-}
+        throwError $ EvalCrashError at "undefined label"
+
+      Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
+        k $ Code' (vs' ++ vs) id
+      Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
+        case c of
+          Trapping msg -> {-# SCC step_Label3 #-}
+            k $ Code' vs (Trapping msg @@ region t:)
+          Returning vs0 -> {-# SCC step_Label4 #-}
+            k $ Code' vs (Returning vs0 @@ region t:)
+          Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
+            vs0' <- lift $ takeFrom n vs0 at
+            k $ Code' (vs0' ++ vs) es0
+          Breaking bk vs0 -> {-# SCC step_Label6 #-}
+            k $ Code' vs (Breaking (bk - 1) vs0 @@ at:)
+          _ -> {-# SCC step_Label7 #-} do
+            step code' $ \res ->
+              k $ Code' vs (Label n es0 res @@ at:)
+
+      Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
+        k $ Code' (vs' ++ vs) id
+      Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
+        k $ Code' vs (Trapping msg @@ region t:)
+      Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
+        vs0' <- lift $ takeFrom n vs0 at
+        k $ Code' (vs0' ++ vs) id
+      Framed n frame' code' -> {-# SCC step_Framed4 #-}
+        Reader.local (\c -> c & configFrame .~ frame'
+                             & configBudget %~ pred) $
+          step code' $ \res ->
+            k $ Code' vs (Framed n frame' res @@ at:)
+
+      Invoke func -> {-# SCC step_Invoke #-} do
+        budget <- view configBudget
+        when (budget == 0) $
+          throwError $ EvalExhaustionError at "call stack exhausted"
+
+        let FuncType ins outs = Func.typeOf func
+            n = length ins
+
+        (reverse -> args, vs') <-
+          if n > length vs
+          then throwError $ EvalCrashError at "stack underflow"
+          else pure $ splitAt n vs
+
+        -- traceM $ "Invoke: ins  = " ++ show ins
+        -- traceM $ "Invoke: args = " ++ show args
+        -- traceM $ "Invoke: outs = " ++ show outs
+        -- traceM $ "Invoke: vs'  = " ++ show vs'
+
+        lift $ checkTypes at ins args
+
+        case func of
+          Func.AstFunc _ ref f -> do
+            inst' <- getInst ref
+            locals' <- lift $ lift $ traverse newMut $
+              args ++ map defaultValue (value f^.funcLocals)
+            let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
+                frame' = Frame inst' locals'
+            k $ Code' vs' (Framed (length outs) frame' code' @@ at:)
+
+          Func.HostFunc _ f -> do
+            -- jww (2018-11-01): Need an exception handler here, so we can
+            -- report host errors.
+            let res = reverse (f args)
+            lift $ checkTypes at outs res
+            k $ Code' (res ++ vs') id
+            -- try (reverse (f args) ++ vs', [])
+            -- with Crash (_, msg) -> EvalCrashError at msg)
+
+          Func.HostFuncEff _ f -> do
+            -- jww (2018-11-01): Need an exception handler here, so we can
+            -- report host errors.
+            res' <- lift $ lift $ f args
+            case res' of
+              Left err -> throwError $ EvalTrapError at err
+              Right (reverse -> res) -> do
+                lift $ checkTypes at outs res
+                k $ Code' (res ++ vs') id
+                -- try (reverse (f args) ++ vs', [])
+                -- with Crash (_, msg) -> EvalCrashError at msg)
 
 {-# SPECIALIZE step
       :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
