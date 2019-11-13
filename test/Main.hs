@@ -2,7 +2,7 @@ module Main where
 
 import Data.List
 import System.Directory
-import System.FilePath
+import System.Environment
 import Test.Tasty (defaultMain, testGroup)
 
 import Property as Property (tests)
@@ -11,11 +11,10 @@ import Spec as Spec (tests)
 
 main :: IO ()
 main = do
-  mwasmPath <- findExecutable "wasm"
-  wasmPath <- case mwasmPath of
-      Nothing -> error "Could not find 'wasm' executable"
+  mwasmPath <- lookupEnv "WASM_SPEC_TESTS"
+  testDir <- case mwasmPath of
+      Nothing -> error "Please define WASM_SPEC_TESTS to point to .../WebAssebly/spec/test/core"
       Just path -> return path
-  let testDir = takeDirectory (takeDirectory wasmPath) </> "test/core"
   putStrLn $ "Using wasm spec test directory: " ++ testDir
   files <- listDirectory testDir
   let wastFiles = flip concatMap files $ \file ->

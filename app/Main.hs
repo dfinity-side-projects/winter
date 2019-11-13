@@ -105,8 +105,8 @@ parseFloat = do
   stepr x acc = (cast x - cast '0' + acc) / 10
   cast = realToFrac . fromEnum
 
-printI32 :: [Value] -> IO [Value]
-printI32 [value] = [] <$ print value
+printI32 :: [Value] -> IO (Either String [Value])
+printI32 [value] = Right [] <$ print value
 printI32 _ = fail "printI32: invalid argument"
 
 app :: ModuleInst Identity IO

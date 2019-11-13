@@ -65,8 +65,8 @@ spectest = do
 
   pr ins = Func.allocHostEff (FuncType ins []) print_
 
-  print_ :: [Values.Value] -> IO [Values.Value]
-  print_ vs = [] <$ mapM_ print_value vs
+  print_ :: [Values.Value] -> IO (Either String [Values.Value])
+  print_ vs = Right [] <$ mapM_ print_value vs
 
   print_value v = printf "%s : %s\n" (show v) (show (Values.typeOf v))
 

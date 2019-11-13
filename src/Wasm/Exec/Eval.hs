@@ -14,7 +14,20 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
 
-module Wasm.Exec.Eval where
+{-|
+An interpreter for wasm function.
+
+Note that although these functions are polymorphic in any 'PrimMonad',
+performance is best if the monad is plain 'IO' or 'ST s', and the 'f' paramter
+is 'Identity' or 'Phrase', due to judicious use of specialization.
+-}
+module Wasm.Exec.Eval
+  ( initialize
+  , invokeByName
+  , getByName
+  , createHostFunc
+  , createHostFuncEff
+  ) where
 
 import           Control.Exception
 import           Control.Monad
@@ -22,6 +35,9 @@ import           Control.Monad.Except
 import           Control.Monad.Trans.Reader hiding (local)
 import qualified Control.Monad.Trans.Reader as Reader
 import           Control.Monad.Trans.State
+import           Control.Monad.Identity
+import           Control.Monad.Primitive
+import           Control.Monad.ST (ST)
 import qualified Data.ByteString.Lazy as B
 import           Data.Default.Class (Default(..))
 import           Data.Fix
@@ -29,12 +45,14 @@ import           Data.Functor.Classes
 import           Data.Int
 import           Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
+import           Data.Primitive.MutVar
 import           Data.List hiding (lookup, elem)
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Text.Lazy (Text, unpack)
 import qualified Data.Vector as V
+import           GHC.Exts (oneShot)
 import           Lens.Micro.Platform
 import           Prelude hiding (lookup, elem)
 import           Text.Show (showListWith)
@@ -44,7 +62,6 @@ import qualified Wasm.Runtime.Func as Func
 import qualified Wasm.Runtime.Global as Global
 import           Wasm.Runtime.Instance
 import qualified Wasm.Runtime.Memory as Memory
-import           Wasm.Runtime.Mutable
 import           Wasm.Runtime.Table as Table
 import           Wasm.Syntax.AST
 import           Wasm.Syntax.Ops
@@ -95,7 +112,7 @@ type Stack a = [a]
 
 data Frame f m = Frame
   { _frameInst :: !(ModuleInst f m)
-  , _frameLocals :: ![Mutable m Value]
+  , _frameLocals :: ![MutVar (PrimState m) Value]
   }
 
 instance Show (Frame f m) where
@@ -119,13 +136,14 @@ instance (Regioned f, Show1 f) => Show (Code f m) where
       . showString " "
       . showListWith (showsPrec1 11) _codeInstrs
 
+type DList a = [a] -> [a]
 data AdminInstr f m
   = Plain !(Instr f)
   | Invoke !(ModuleFunc f m)
   | Trapping !String
   | Returning !(Stack Value)
   | Breaking !Int !(Stack Value)
-  | Label !Int ![f (Instr f)] !(Code f m)
+  | Label !Int !(DList (f (AdminInstr f m))) !(Code f m)
   | Framed !Int !(Frame f m) !(Code f m)
 
 instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
@@ -139,7 +157,7 @@ instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
                                            . showsPrec1 11 s
     Label i l c  -> showString "Label "     . showsPrec 11 i
                                            . showString " "
-                                           . showListWith (showsPrec1 11) l
+                                           . showListWith (showsPrec1 11) (l [])
                                            . showString " "
                                            . showsPrec 11 c
     Framed i f c -> showString "Framed "    . showsPrec 11 i
@@ -147,8 +165,6 @@ instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
                                            . showsPrec 11 f
                                            . showString " "
                                            . showsPrec 11 c
-
-makeLenses ''Code
 
 data Config f m = Config
   { _configModules :: !(IntMap (ModuleInst f m))
@@ -191,14 +207,6 @@ lookup category inst l x@(value -> x') =
   else throwError $
     EvalCrashError (region x) ("undefined " <> category <> " " <> show x')
 
-assignment :: (Regioned f, Monad m)
-           => String -> s -> Lens' s [a] -> Var f -> a -> EvalT m s
-assignment category inst l x@(value -> x') v =
-  if fromIntegral x' < length (inst^.l)
-  then pure $ inst & l.ix (fromIntegral (value x)) .~ v
-  else throwError $
-    EvalCrashError (region x) ("cannot assign " <> category <> " " <> show x')
-
 type_ :: (Regioned f, Monad m)
       => ModuleInst f m -> Var f -> EvalT m FuncType
 type_ inst = fmap value . lookup "type" inst (miModule.moduleTypes)
@@ -220,10 +228,10 @@ global :: (Regioned f, Monad m)
 global inst = lookup "global" inst miGlobals
 
 local :: (Regioned f, Monad m)
-      => Frame f m -> Var f -> EvalT m (Mutable m Value)
+      => Frame f m -> Var f -> EvalT m (MutVar (PrimState m) Value)
 local frame = lookup "local" frame frameLocals
 
-elem :: (Regioned f, MonadRef m, Monad m)
+elem :: (Regioned f, PrimMonad m)
      => ModuleInst f m -> Var f -> Table.Index -> Region
      -> EvalT m (ModuleFunc f m)
 elem inst x i at' = do
@@ -234,7 +242,7 @@ elem inst x i at' = do
       EvalTrapError at' ("uninitialized element " ++ show i)
     Just f -> pure f
 
-funcElem :: (Regioned f, MonadRef m, Monad m)
+funcElem :: (Regioned f, PrimMonad m)
          => ModuleInst f m -> Var f -> Table.Index -> Region
          -> EvalT m (ModuleFunc f m)
 funcElem = elem
@@ -246,13 +254,6 @@ takeFrom n vs at' =
   if n > length vs
   then throwError $ EvalCrashError at' "stack underflow"
   else pure $ take n vs
-
-dropFrom :: Monad m
-         => Int -> Stack a -> Region -> EvalT m (Stack a)
-dropFrom n vs at' =
-  if n > length vs
-  then throwError $ EvalCrashError at' "stack underflow"
-  else pure $ drop n vs
 
 partialZip :: [a] -> [b] -> [Either a (Either b (a, b))]
 partialZip [] [] = []
@@ -284,186 +285,98 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
  *   c : config
  -}
 
-step_work :: (Regioned f, MonadRef m, Monad m, Show1 f)
-          => Stack Value -> Region -> AdminInstr f m
-          -> (Code f m -> CEvalT f m r)
-          -> CEvalT f m r
-step_work vs at i k = case i of
-  Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
+type EvalCont f m r = Stack Value -> DList (f (AdminInstr f m)) -> CEvalT f m r
 
-  Trapping msg -> {-# SCC step_Trapping #-}
-    throwError $ EvalTrapError at msg
-  Returning _  -> {-# SCC step_Returning #-}
-    throwError $ EvalCrashError at "undefined frame"
-  Breaking _ _ -> {-# SCC step_Breaking #-}
-    throwError $ EvalCrashError at "undefined label"
+-- Make sure that our use of ReaderT does not get in the way of
+-- eta-expansion. See
+-- https://twitter.com/nomeata/status/1192731874248077312
+etaReaderT :: ReaderT r m a -> ReaderT r m a
+etaReaderT = ReaderT . oneShot . runReaderT
 
-  Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
-    k $ Code (vs' ++ vs) []
-  Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
-    case c of
-      Trapping msg -> {-# SCC step_Label3 #-}
-        k $ Code vs [Trapping msg @@ region t]
-      Returning vs0 -> {-# SCC step_Label4 #-}
-        k $ Code vs [Returning vs0 @@ region t]
-      Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
-        vs0' <- lift $ takeFrom n vs0 at
-        k $ Code (vs0' ++ vs) (map plain es0)
-      Breaking bk vs0 -> {-# SCC step_Label6 #-}
-        k $ Code vs [Breaking (bk - 1) vs0 @@ at]
-      _ -> {-# SCC step_Label7 #-} do
-        step code' $ \res ->
-          k $ Code vs [Label n es0 res @@ at]
-
-  Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
-    k $ Code (vs' ++ vs) []
-  Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
-    k $ Code vs [Trapping msg @@ region t]
-  Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
-    vs0' <- lift $ takeFrom n vs0 at
-    k $ Code (vs0' ++ vs) []
-  Framed n frame' code' -> {-# SCC step_Framed4 #-}
-    Reader.local (\c -> c & configFrame .~ frame'
-                         & configBudget %~ pred) $
-      step code' $ \res ->
-        k $ Code vs [Framed n frame' res @@ at]
-
-  Invoke func -> {-# SCC step_Invoke #-} do
-    budget <- view configBudget
-    when (budget == 0) $
-      throwError $ EvalExhaustionError at "call stack exhausted"
-
-    let FuncType ins outs = Func.typeOf func
-        n = length ins
-
-    (reverse -> args, vs') <-
-      if n > length vs
-      then throwError $ EvalCrashError at "stack underflow"
-      else pure $ splitAt n vs
-
-    -- traceM $ "Invoke: ins  = " ++ show ins
-    -- traceM $ "Invoke: args = " ++ show args
-    -- traceM $ "Invoke: outs = " ++ show outs
-    -- traceM $ "Invoke: vs'  = " ++ show vs'
-
-    lift $ checkTypes at ins args
-
-    case func of
-      Func.AstFunc _ ref f -> do
-        inst' <- getInst ref
-        locals' <- lift $ lift $ traverse newMut $
-          args ++ map defaultValue (value f^.funcLocals)
-        let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
-            frame' = Frame inst' locals'
-        k $ Code vs' [Framed (length outs) frame' code' @@ at]
-
-      Func.HostFunc _ f -> do
-        -- jww (2018-11-01): Need an exception handler here, so we can
-        -- report host errors.
-        let res = reverse (f args)
-        lift $ checkTypes at outs res
-        k $ Code (res ++ vs') []
-        -- try (reverse (f args) ++ vs', [])
-        -- with Crash (_, msg) -> EvalCrashError at msg)
-
-      Func.HostFuncEff _ f -> do
-        -- jww (2018-11-01): Need an exception handler here, so we can
-        -- report host errors.
-        res <- lift $ lift $ reverse <$> f args
-        lift $ checkTypes at outs res
-        k $ Code (res ++ vs') []
-        -- try (reverse (f args) ++ vs', [])
-        -- with Crash (_, msg) -> EvalCrashError at msg)
-
-{-# SPECIALIZE step_work
-      :: Stack Value -> Region -> AdminInstr Phrase IO
-      -> (Code Phrase IO -> CEvalT Phrase IO r)
-      -> CEvalT Phrase IO r #-}
-
-instr :: (Regioned f, {-Show1 f,-} MonadRef m, Monad m)
+instr :: (Regioned f, {-Show1 f,-} PrimMonad m)
       => Stack Value -> Region -> Instr f
-      -> (Code f m -> CEvalT f m r)
+      -> EvalCont f m r
       -> CEvalT f m r
-instr vs at e' k = case (unFix e', vs) of
+instr vs at e' k = etaReaderT $ case (unFix e', vs) of
   (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
-    k $ Code vs [Trapping "unreachable executed" @@ at]
+    k vs (Trapping "unreachable executed" @@ at :)
   (Nop, vs)                      -> {-# SCC step_Nop #-}
-    k $ Code vs []
+    k vs id
   (Block ts es', vs)             -> {-# SCC step_Block #-}
-    k $ Code vs [Label (length ts) [] (Code [] (map plain es')) @@ at]
+    k vs (Label (length ts) id (Code [] (map plain es')) @@ at :)
   (Loop _ es', vs)               -> {-# SCC step_Loop #-}
-    k $ Code vs [Label 0 [e' @@ at] (Code [] (map plain es')) @@ at]
+    k vs (Label 0 ((plain $ e' @@ at):) (Code [] (map plain es')) @@ at :)
   (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
-    k $ Code vs' [Plain (Fix (Block ts es2)) @@ at]
+    k vs' (Plain (Fix (Block ts es2)) @@ at :)
   (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
-    k $ Code vs' [Plain (Fix (Block ts es1)) @@ at]
+    k vs' (Plain (Fix (Block ts es1)) @@ at :)
   (Br x, vs)                     -> {-# SCC step_Br #-}
-    k $ Code [] [Breaking (value x) vs @@ at]
+    k [] (Breaking (value x) vs @@ at :)
   (BrIf _, I32 0 : vs')          -> {-# SCC step_BrIf1 #-}
-    k $ Code vs' []
+    k vs' id
   (BrIf x, I32 _ : vs')          -> {-# SCC step_BrIf2 #-}
-    k $ Code vs' [Plain (Fix (Br x)) @@ at]
+    k vs' (Plain (Fix (Br x)) @@ at:)
   (BrTable xs x, I32 i : vs')
     | i < 0 || fromIntegral i >= length xs -> {-# SCC step_BrTable1 #-}
-      k $ Code vs' [Plain (Fix (Br x)) @@ at]
+      k vs' (Plain (Fix (Br x)) @@ at:)
     | otherwise -> {-# SCC step_BrTable2 #-}
-      k $ Code vs' [Plain (Fix (Br (xs !! fromIntegral i))) @@ at]
+      k vs' (Plain (Fix (Br (xs !! fromIntegral i))) @@ at:)
   (Return, vs)                   -> {-# SCC step_Return #-}
-    k $ Code vs [Returning vs @@ at]
+    k vs (Returning vs @@ at:)
 
   (Call x, vs) -> {-# SCC step_Call #-} do
     inst <- getFrameInst
     -- traceM $ "Call " ++ show (value x)
     f <- lift $ func inst x
-    k $ Code vs [Invoke f @@ at]
+    k vs (Invoke f @@ at:)
 
   (CallIndirect x, I32 i : vs) -> {-# SCC step_CallIndirect #-} do
     inst <- getFrameInst
     func <- lift $ funcElem inst (0 @@ at) i at
     t <- lift $ type_ inst x
-    k $ Code vs $
+    k vs $
       if t /= Func.typeOf func
-      then [Trapping "indirect call type mismatch" @@ at]
-      else [Invoke func @@ at]
+      then (Trapping "indirect call type mismatch" @@ at:)
+      else (Invoke func @@ at:)
 
   (Drop, _ : vs') -> {-# SCC step_Drop #-}
-    k $ Code vs' []
+    k vs' id
 
   (Select, I32 0 : v2 : _ : vs') -> {-# SCC step_Select1 #-}
-    k $ Code (v2 : vs') []
+    k (v2 : vs') id
   (Select, I32 _ : _ : v1 : vs') -> {-# SCC step_Select2 #-}
-    k $ Code (v1 : vs') []
+    k (v1 : vs') id
 
   (GetLocal x, vs) -> {-# SCC step_GetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
-    l <- lift $ lift $ getMut mut
-    k $ Code (l : vs) []
+    l <- readMutVar mut
+    k (l : vs) id
 
   (SetLocal x, v : vs') -> {-# SCC step_SetLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
-    lift $ lift $ setMut mut v
-    k $ Code vs' []
+    writeMutVar mut v
+    k vs' id
 
   (TeeLocal x, v : vs') -> {-# SCC step_TeeLocal #-} do
     frame <- view configFrame
     mut <- lift $ local frame x
-    lift $ lift $ setMut mut v
-    k $ Code (v : vs') []
+    writeMutVar mut v
+    k (v : vs') id
 
   (GetGlobal x, vs) -> {-# SCC step_GetGlobal #-} do
     inst <- getFrameInst
     g <- lift . lift . Global.load =<< lift (global inst x)
     -- traceM $ "GetGlobal " ++ show (value x) ++ " = " ++ show g
-    k $ Code (g : vs) []
+    k (g : vs) id
 
   (SetGlobal x, v : vs') -> {-# SCC step_SetGlobal #-} do
     inst <- getFrameInst
     g <- lift $ global inst x
     eres <- lift $ lift $ runExceptT $ Global.store g v
     case eres of
-      Right () -> k $ Code vs' []
+      Right () -> k vs' id
       Left err -> throwError $ EvalCrashError at $ case err of
         Global.GlobalNotMutable -> "write to immutable global"
         Global.GlobalTypeError  -> "type mismatch at global write"
@@ -477,9 +390,9 @@ instr vs at e' k = case (unFix e', vs) of
     eres <- lift $ lift $ runExceptT $ case op^.memorySize of
           Nothing        -> Memory.loadValue mem addr off ty
           Just (sz, ext) -> Memory.loadPacked sz ext mem addr off ty
-    k $ case eres of
-      Right v' -> Code (v' : vs') []
-      Left exn -> Code vs' [Trapping (memoryErrorString exn) @@ at]
+    case eres of
+      Right v' -> k (v' : vs') id
+      Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at:)
 
   (Store op, v : I32 i : vs') -> {-# SCC step_Store #-} do
     inst <- getFrameInst
@@ -490,15 +403,14 @@ instr vs at e' k = case (unFix e', vs) of
           Nothing -> Memory.storeValue mem addr off v
           Just sz -> Memory.storePacked sz mem addr off v
     case eres of
-      Right () -> k $ Code vs' []
-      Left exn ->
-        k $ Code vs' [Trapping (memoryErrorString exn) @@ at]
+      Right () -> k vs' id
+      Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at :)
 
   (MemorySize, vs) -> {-# SCC step_MemorySize #-} do
     inst <- getFrameInst
     mem  <- lift $ memory inst (0 @@ at)
     sz   <- lift $ lift $ Memory.size mem
-    k $ Code (I32 sz : vs) []
+    k (I32 sz : vs) id
 
   (MemoryGrow, I32 delta : vs') -> {-# SCC step_MemoryGrow #-} do
     inst    <- getFrameInst
@@ -508,18 +420,18 @@ instr vs at e' k = case (unFix e', vs) of
     let result = case eres of
             Left _   -> -1
             Right () -> oldSize
-    k $ Code (I32 result : vs') []
+    k (I32 result : vs') id
 
   (Const v, vs) -> {-# SCC step_Const #-}
-    k $ Code (value v : vs) []
+    k (value v : vs) id
 
   (Test testop, v : vs') -> {-# SCC step_Test #-} do
     let eres = case testop of
           I32TestOp o -> testOp @Int32 intTestOp o v
           I64TestOp o -> testOp @Int64 intTestOp o v
-    k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Compare relop, v2 : v1 : vs') -> {-# SCC step_Compare #-} do
     let eres = case relop of
@@ -527,9 +439,9 @@ instr vs at e' k = case (unFix e', vs) of
           I64CompareOp o -> compareOp @Int64 intRelOp o v1 v2
           F32CompareOp o -> compareOp @Float floatRelOp o v1 v2
           F64CompareOp o -> compareOp @Double floatRelOp o v1 v2
-    k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Unary unop, v : vs') -> {-# SCC step_Unary #-} do
     let eres = case unop of
@@ -537,9 +449,9 @@ instr vs at e' k = case (unFix e', vs) of
           I64UnaryOp o -> unaryOp @Int64 intUnOp o v
           F32UnaryOp o -> unaryOp @Float floatUnOp o v
           F64UnaryOp o -> unaryOp @Double floatUnOp o v
-    k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Binary binop, v2 : v1 : vs') -> {-# SCC step_Binary #-} do
     let eres = case binop of
@@ -547,9 +459,9 @@ instr vs at e' k = case (unFix e', vs) of
           I64BinaryOp o -> binaryOp @Int64 intBinOp o v1 v2
           F32BinaryOp o -> binaryOp @Float floatBinOp o v1 v2
           F64BinaryOp o -> binaryOp @Double floatBinOp o v1 v2
-    k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   (Convert cvtop, v : vs') -> {-# SCC step_Convert #-} do
     let eres = case cvtop of
@@ -557,9 +469,9 @@ instr vs at e' k = case (unFix e', vs) of
           I64ConvertOp o -> intCvtOp @Int64 o v
           F32ConvertOp o -> floatCvtOp @Float o v
           F64ConvertOp o -> floatCvtOp @Double o v
-    k $ case eres of
-      Left err -> Code vs' [Trapping (show err) @@ at]
-      Right v' -> Code (v' : vs') []
+    case eres of
+      Left err -> k vs' (Trapping (show err) @@ at :)
+      Right v' -> k (v' : vs') id
 
   _ ->  {-# SCC step_fallthrough_ #-} do
     let s1 = show (reverse vs)
@@ -568,35 +480,161 @@ instr vs at e' k = case (unFix e', vs) of
       ("missing or ill-typed operand on stack (" ++ s1 ++ " : " ++ s2 ++ ")")
 
 {-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Identity
+      -> (EvalCont Identity IO r)
+      -> CEvalT Identity IO r #-}
+
+{-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Identity
+      -> (EvalCont Identity (ST s) r)
+      -> CEvalT Identity (ST s) r #-}
+
+{-# SPECIALIZE instr
       :: Stack Value -> Region -> Instr Phrase
-      -> (Code Phrase IO -> CEvalT Phrase IO r)
+      -> (EvalCont Phrase IO r)
       -> CEvalT Phrase IO r #-}
 
-step :: (Regioned f, MonadRef m, Monad m, Show1 f)
+{-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Phrase
+      -> (EvalCont Phrase (ST s) r)
+      -> CEvalT Phrase (ST s) r #-}
+
+step :: (Regioned f, PrimMonad m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
-step (Code _ []) _ = error "Cannot step without instructions"
-step (Code vs (e:es)) k = do
-  -- traceM $ "step: " ++ showsPrec1 11 e ""
-  step_work vs (region e) (value e) $ k . (codeInstrs <>~ es)
+step c k' = etaReaderT $ case c of
+  Code _ [] -> error "Cannot step without instructions"
+  Code vs (e:es) ->
+    let at = region e
+        k vs es' = k' (Code vs (es' es))
+    in case value e of
+      Plain e' -> {-# SCC step_Plain #-} instr vs at e' k
+
+      Trapping msg -> {-# SCC step_Trapping #-}
+        throwError $ EvalTrapError at msg
+      Returning _  -> {-# SCC step_Returning #-}
+        throwError $ EvalCrashError at "undefined frame"
+      Breaking _ _ -> {-# SCC step_Breaking #-}
+        throwError $ EvalCrashError at "undefined label"
+
+      Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
+        k (vs' ++ vs) id
+      Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
+        case c of
+          Trapping msg -> {-# SCC step_Label3 #-}
+            k vs (Trapping msg @@ region t:)
+          Returning vs0 -> {-# SCC step_Label4 #-}
+            k vs (Returning vs0 @@ region t:)
+          Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
+            vs0' <- lift $ takeFrom n vs0 at
+            k (vs0' ++ vs) es0
+          Breaking bk vs0 -> {-# SCC step_Label6 #-}
+            k vs (Breaking (bk - 1) vs0 @@ at:)
+          _ -> {-# SCC step_Label7 #-} do
+            step code' $ \res -> {-# SCC step_Label7_k #-} do
+              k vs (Label n es0 res @@ at:)
+
+      Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
+        k (vs' ++ vs) id
+      Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
+        k vs (Trapping msg @@ region t:)
+      Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
+        vs0' <- lift $ takeFrom n vs0 at
+        k (vs0' ++ vs) id
+      Framed n frame' code' -> {-# SCC step_Framed4 #-}
+        Reader.local (\c -> c & configFrame .~ frame'
+                             & configBudget %~ pred) $
+          step code' $ \res ->
+            k vs (Framed n frame' res @@ at:)
+
+      Invoke func -> {-# SCC step_Invoke #-} do
+        budget <- view configBudget
+        when (budget == 0) $
+          throwError $ EvalExhaustionError at "call stack exhausted"
+
+        let FuncType ins outs = Func.typeOf func
+            n = length ins
+
+        (reverse -> args, vs') <-
+          if n > length vs
+          then throwError $ EvalCrashError at "stack underflow"
+          else pure $ splitAt n vs
+
+        -- traceM $ "Invoke: ins  = " ++ show ins
+        -- traceM $ "Invoke: args = " ++ show args
+        -- traceM $ "Invoke: outs = " ++ show outs
+        -- traceM $ "Invoke: vs'  = " ++ show vs'
+
+        lift $ checkTypes at ins args
+
+        case func of
+          Func.AstFunc _ ref f -> do
+            inst' <- getInst ref
+            locals' <- traverse newMutVar $
+              args ++ map defaultValue (value f^.funcLocals)
+            let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
+                frame' = Frame inst' locals'
+            k vs' (Framed (length outs) frame' code' @@ at:)
+
+          Func.HostFunc _ f -> do
+            -- jww (2018-11-01): Need an exception handler here, so we can
+            -- report host errors.
+            let res = reverse (f args)
+            lift $ checkTypes at outs res
+            k (res ++ vs') id
+            -- try (reverse (f args) ++ vs', [])
+            -- with Crash (_, msg) -> EvalCrashError at msg)
+
+          Func.HostFuncEff _ f -> do
+            -- jww (2018-11-01): Need an exception handler here, so we can
+            -- report host errors.
+            res' <- lift $ lift $ f args
+            case res' of
+              Left err -> throwError $ EvalTrapError at err
+              Right (reverse -> res) -> do
+                lift $ checkTypes at outs res
+                k (res ++ vs') id
+                -- try (reverse (f args) ++ vs', [])
+                -- with Crash (_, msg) -> EvalCrashError at msg)
+
+{-# SPECIALIZE step
+      :: Code Identity IO -> (Code Identity IO -> CEvalT Identity IO r)
+      -> CEvalT Identity IO r #-}
+
+{-# SPECIALIZE step
+      :: Code Identity (ST s) -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
+      -> CEvalT Identity (ST s) r #-}
 
 {-# SPECIALIZE step
       :: Code Phrase IO -> (Code Phrase IO -> CEvalT Phrase IO r)
       -> CEvalT Phrase IO r #-}
 
-eval :: (Regioned f, MonadRef m, Monad m, Show1 f)
+{-# SPECIALIZE step
+      :: Code Phrase (ST s) -> (Code Phrase (ST s) -> CEvalT Phrase (ST s) r)
+      -> CEvalT Phrase (ST s) r #-}
+
+eval :: (Regioned f, PrimMonad m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
-eval c@(Code vs es) = case es of
+eval c@(Code vs es) = etaReaderT $ case es of
   [] -> pure vs
   t@(value -> Trapping msg) : _ ->
     throwError $ EvalTrapError (region t) msg
   _ -> step c eval
 
 {-# SPECIALIZE eval
+      :: Code Identity IO -> CEvalT Identity IO (Stack Value) #-}
+
+{-# SPECIALIZE eval
+      :: Code Identity (ST s) -> CEvalT Identity (ST s) (Stack Value) #-}
+
+{-# SPECIALIZE eval
       :: Code Phrase IO -> CEvalT Phrase IO (Stack Value) #-}
+
+{-# SPECIALIZE eval
+      :: Code Phrase (ST s) -> CEvalT Phrase (ST s) (Stack Value) #-}
 
 {- Functions & Constants -}
 
-invoke :: (Regioned f, MonadRef m, Monad m, Show1 f)
+invoke :: (Regioned f, PrimMonad m, Show1 f)
        => IntMap (ModuleInst f m)
        -> ModuleInst f m
        -> ModuleFunc f m
@@ -614,13 +652,34 @@ invoke mods inst func vs = do
   --   Exhaustion.error at "call stack exhausted"
 
 {-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Identity IO)
+      -> ModuleInst Identity IO
+      -> ModuleFunc Identity IO
+      -> [Value]
+      -> EvalT IO [Value] #-}
+
+{-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Identity (ST s))
+      -> ModuleInst Identity (ST s)
+      -> ModuleFunc Identity (ST s)
+      -> [Value]
+      -> EvalT (ST s) [Value] #-}
+
+{-# SPECIALIZE invoke
       :: IntMap (ModuleInst Phrase IO)
       -> ModuleInst Phrase IO
       -> ModuleFunc Phrase IO
       -> [Value]
       -> EvalT IO [Value] #-}
 
-invokeByName :: (Regioned f, MonadRef m, Monad m, Show1 f)
+{-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Phrase (ST s))
+      -> ModuleInst Phrase (ST s)
+      -> ModuleFunc Phrase (ST s)
+      -> [Value]
+      -> EvalT (ST s) [Value] #-}
+
+invokeByName :: (Regioned f, PrimMonad m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> Text -> [Value]
              -> EvalT m [Value]
 invokeByName mods inst name vs = do
@@ -631,20 +690,29 @@ invokeByName mods inst name vs = do
       "Cannot invoke export " ++ unpack name ++ ": " ++ show e
 
 {-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Identity IO)
+      -> ModuleInst Identity IO -> Text -> [Value] -> EvalT IO [Value] #-}
+
+{-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Identity (ST s))
+      -> ModuleInst Identity (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
+
+{-# SPECIALIZE invokeByName
       :: IntMap (ModuleInst Phrase IO)
       -> ModuleInst Phrase IO -> Text -> [Value] -> EvalT IO [Value] #-}
 
-getByName :: (Regioned f, Show1 f, MonadRef m, Monad m)
+{-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Phrase (ST s))
+      -> ModuleInst Phrase (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
+
+getByName :: (Regioned f, Show1 f, PrimMonad m)
           => ModuleInst f m -> Text -> EvalT m Value
 getByName inst name = case inst ^. miExports.at name of
-  Just (ExternGlobal g) -> lift $ getMut (g^.Global.giContent)
+  Just (ExternGlobal g) -> readMutVar (g^.Global.giContent)
   e -> throwError $ EvalCrashError def $
     "Cannot get exported global " ++ unpack name ++ ": " ++ show e
 
-{-# SPECIALIZE getByName
-      :: ModuleInst Phrase IO -> Text -> EvalT IO Value #-}
-
-evalConst :: (Regioned f, MonadRef m, Monad m, Show1 f)
+evalConst :: (Regioned f, PrimMonad m, Show1 f)
           => IntMap (ModuleInst f m)
           -> ModuleInst f m -> Expr f -> EvalT m Value
 evalConst mods inst expr = do
@@ -673,10 +741,10 @@ createFunc inst ref f = do
 createHostFunc :: FuncType -> ([Value] -> [Value]) -> ModuleFunc f m
 createHostFunc = Func.allocHost
 
-createHostFuncEff :: FuncType -> ([Value] -> m [Value]) -> ModuleFunc f m
+createHostFuncEff :: FuncType -> ([Value] -> m (Either String [Value])) -> ModuleFunc f m
 createHostFuncEff = Func.allocHostEff
 
-createTable :: (Regioned f, MonadRef m, Monad m)
+createTable :: (Regioned f, PrimMonad m)
             => Table f -> EvalT m (TableInst m (ModuleFunc f m))
 createTable tab = do
   eres <- lift $ runExceptT $ Table.alloc (value tab)
@@ -692,11 +760,11 @@ liftMem at act = do
     Left err -> throwError $ EvalMemoryError at err
     Right x  -> pure x
 
-createMemory :: (Regioned f, MonadRef m, Monad m)
+createMemory :: (Regioned f, PrimMonad m)
              => Memory f -> EvalT m (Memory.MemoryInst m)
 createMemory mem = liftMem (region mem) $ Memory.alloc (value mem)
 
-createGlobal :: (Regioned f, MonadRef m, Monad m, Show1 f)
+createGlobal :: (Regioned f, PrimMonad m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> f (Global f)
              -> EvalT m (Global.GlobalInst m)
 createGlobal mods inst x@(value -> glob) = do
@@ -716,7 +784,7 @@ createExport inst (value -> ex) = do
     GlobalExport x -> ExternGlobal <$> global inst x
   pure $ M.singleton (ex^.exportName) ext
 
-initTable :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initTable :: (Regioned f, Show1 f, PrimMonad m)
           => IntMap (ModuleInst f m) -> ModuleInst f m -> f (TableSegment f)
           -> EvalT m ()
 initTable mods inst s@(value -> seg) = do
@@ -730,7 +798,7 @@ initTable mods inst s@(value -> seg) = do
   fs <- traverse (func inst) (seg^.segmentInit)
   lift $ Table.blit tab offset (V.fromList fs)
 
-initMemory :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initMemory :: (Regioned f, Show1 f, PrimMonad m)
            => IntMap (ModuleInst f m) -> ModuleInst f m -> f (MemorySegment f)
            -> EvalT m ()
 initMemory mods inst s@(value -> seg) = do
@@ -746,7 +814,7 @@ initMemory mods inst s@(value -> seg) = do
     Memory.storeBytes mem (fromIntegral offset)
                       (V.fromList (B.unpack (seg^.segmentInit)))
 
-addImport :: (Regioned f, MonadRef m, Monad m)
+addImport :: (Regioned f, PrimMonad m)
           => ModuleInst f m
           -> Extern f m
           -> f (Import f)
@@ -761,7 +829,7 @@ addImport inst ext im = do
       ExternMemory mem  -> inst & miMemories %~ (mem  :)
       ExternGlobal glob -> inst & miGlobals  %~ (glob :)
 
-resolveImports :: (Regioned f, Show1 f, MonadRef m, Monad m)
+resolveImports :: (Regioned f, Show1 f, PrimMonad m)
                => Map Text ModuleRef
                -> IntMap (ModuleInst f m)
                -> ModuleInst f m
@@ -784,7 +852,7 @@ resolveImports names mods inst = flip execStateT inst $
               m' <- lift $ addImport m ext im
               put m'
 
-initialize :: (Regioned f, Show1 f, MonadRef m, Monad m)
+initialize :: (Regioned f, Show1 f, PrimMonad m)
            => f (Module f)
            -> Map Text ModuleRef
            -> IntMap (ModuleInst f m)
@@ -818,6 +886,30 @@ initialize (value -> mod) names mods = do
       lift $ invoke (IM.insert ref inst3 mods) inst3 f []
 
   pure (ref, inst')
+
+{-# SPECIALIZE initialize
+           :: Identity (Module Identity)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Identity IO)
+           -> EvalT IO (ModuleRef, ModuleInst Identity IO) #-}
+
+{-# SPECIALIZE initialize
+           :: Identity (Module Identity)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Identity (ST s))
+           -> EvalT (ST s) (ModuleRef, ModuleInst Identity (ST s)) #-}
+
+{-# SPECIALIZE initialize
+           :: Phrase (Module Phrase)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Phrase IO)
+           -> EvalT IO (ModuleRef, ModuleInst Phrase IO) #-}
+
+{-# SPECIALIZE initialize
+           :: Phrase (Module Phrase)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Phrase (ST s))
+           -> EvalT (ST s) (ModuleRef, ModuleInst Phrase (ST s)) #-}
 
 nextKey :: IntMap a -> IM.Key
 nextKey m = go (max 1 (IM.size m))
