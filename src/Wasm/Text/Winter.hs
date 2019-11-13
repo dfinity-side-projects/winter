@@ -9,6 +9,7 @@
 module Wasm.Text.Winter where
 
 import           Control.Monad.Except
+import           Control.Monad.Primitive
 import           Data.Binary.Get
 import           Data.Default.Class (Default(..))
 import           Data.Functor.Classes
@@ -17,14 +18,13 @@ import           Wasm.Text.Wast
 import qualified Wasm.Binary.Decode as Decode
 import qualified Wasm.Exec.Eval as Eval
 import qualified Wasm.Runtime.Instance as Instance
-import           Wasm.Runtime.Mutable
 import qualified Wasm.Syntax.AST as AST
 import qualified Wasm.Syntax.Values as Values
 import           Wasm.Util.Source
 
 data Winter (f :: * -> *) = Winter
 
-instance (MonadRef m, Regioned f, Decode.Decodable f, Show1 f)
+instance (PrimMonad m, Regioned f, Decode.Decodable f, Show1 f)
     => WasmEngine (Winter f) m where
   type Value (Winter f) = Values.Value
   type Module (Winter f) = AST.Module f

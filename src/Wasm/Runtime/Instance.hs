@@ -8,6 +8,7 @@
 
 module Wasm.Runtime.Instance where
 
+import           Control.Monad.Primitive
 import           Data.Functor.Classes
 import           Data.Map (Map)
 import qualified Data.Map as M
@@ -15,7 +16,6 @@ import           Data.Text.Lazy (Text)
 import           Lens.Micro.Platform
 import           Text.Show
 
-import           Wasm.Runtime.Mutable
 import           Wasm.Runtime.Func as Func
 import           Wasm.Runtime.Global as Global
 import           Wasm.Runtime.Memory as Memory
@@ -91,7 +91,7 @@ emptyModuleInst m = ModuleInst
   , _miExports  = mempty
   }
 
-externTypeOf :: MonadRef m => Extern f m -> m ExternType
+externTypeOf :: PrimMonad m => Extern f m -> m ExternType
 externTypeOf = \case
   ExternFunc func   -> pure $ ExternFuncType (Func.typeOf func)
   ExternTable tab   -> ExternTableType <$> Table.typeOf tab

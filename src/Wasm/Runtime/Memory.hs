@@ -25,10 +25,12 @@ module Wasm.Runtime.Memory
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Except
+import           Control.Monad.Primitive
 import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Array.Unsafe (castSTUArray)
 import           Data.Bits
 import           Data.Int
+import           Data.Primitive.MutVar
 import           Data.Vector (Vector)
 import qualified Data.Vector as V
 import           Data.Vector.Unboxed.Mutable (MVector)
@@ -37,16 +39,13 @@ import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
 
-import           Wasm.Runtime.Mutable
 import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Types
 import           Wasm.Syntax.Values (Value)
 import qualified Wasm.Syntax.Values as Values
 
-import Control.Monad.Primitive
-
 data MemoryInst m = MemoryInst
-  { _miContent :: Mutable m (MVector (PrimState m) Word8)
+  { _miContent :: MutVar (PrimState m) (MVector (PrimState m) Word8)
   , _miMax :: Maybe Size
   }
 
@@ -82,30 +81,30 @@ create n
   | n > 0x10000 = return $ Left MemorySizeOverflow
   | otherwise   = Right <$> VM.replicate (fromIntegral (n * pageSize)) 0
 
-alloc :: (MonadRef m)
+alloc :: PrimMonad m
       => MemoryType -> ExceptT MemoryError m (MemoryInst m)
 alloc (Limits min' mmax) = create min' >>= \case
   Left err -> throwError err
   Right m -> do
-    mem <- newMut m
+    mem <- newMutVar m
     pure $ assert (withinLimits min' mmax) $
       MemoryInst
         { _miContent = mem
         , _miMax = mmax
         }
 
-bound :: (MonadRef m) => MemoryInst m -> m Size
+bound :: PrimMonad m => MemoryInst m -> m Size
 bound mem = do
-  m <- getMut (mem^.miContent)
+  m <- readMutVar (mem^.miContent)
   pure $ fromIntegral $ VM.length m
 
-size :: (MonadRef m) => MemoryInst m -> m Size
+size :: PrimMonad m => MemoryInst m -> m Size
 size mem = liftM2 div (bound mem) (pure pageSize)
 
-typeOf :: (MonadRef m) => MemoryInst m -> m MemoryType
+typeOf :: PrimMonad m => MemoryInst m -> m MemoryType
 typeOf mem = Limits <$> size mem <*> pure (mem^.miMax)
 
-grow :: (MonadRef m)
+grow :: PrimMonad m
      => MemoryInst m -> Size -> ExceptT MemoryError m ()
 grow mem delta = do
   oldSize <- lift $ size mem
@@ -117,23 +116,23 @@ grow mem delta = do
      | newSize > 0x10000 ->
          throwError MemorySizeOverflow
      | otherwise -> lift $ do
-        mv <- getMut (mem^.miContent)
+        mv <- readMutVar (mem^.miContent)
         mv' <- VM.grow mv (fromIntegral (delta * pageSize))
         forM_ [oldSize * pageSize .. newSize * pageSize - 1] $ \i ->
           VM.write mv' (fromIntegral i) 0
-        setMut (mem^.miContent) mv'
+        writeMutVar (mem^.miContent) mv'
 
-loadByte :: (MonadRef m)
+loadByte :: PrimMonad m
          => MemoryInst m -> Address -> ExceptT MemoryError m Word8
 loadByte mem a = do
   bnd <- lift $ bound mem
   if | a >= fromIntegral bnd ->
        throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- getMut (mem^.miContent)
+        mv <- readMutVar (mem^.miContent)
         VM.read mv (fromIntegral a)
 
-storeByte :: (MonadRef m)
+storeByte :: PrimMonad m
           => MemoryInst m -> Address -> Word8
           -> ExceptT MemoryError m ()
 storeByte mem a b = do
@@ -141,16 +140,16 @@ storeByte mem a b = do
   if | a >= fromIntegral bnd ->
        throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- getMut (mem^.miContent)
+        mv <- readMutVar (mem^.miContent)
         VM.write mv (fromIntegral a) b
 
-loadBytes :: (MonadRef m)
+loadBytes :: PrimMonad m
           => MemoryInst m -> Address -> Size
           -> ExceptT MemoryError m (Vector Word8)
 loadBytes mem a n = V.generateM (fromIntegral n) $ \i ->
   loadByte mem (a + fromIntegral i)
 
-storeBytes :: (MonadRef m)
+storeBytes :: PrimMonad m
            => MemoryInst m -> Address -> Vector Word8
            -> ExceptT MemoryError m ()
 storeBytes mem a bs = do
@@ -158,7 +157,7 @@ storeBytes mem a bs = do
   if | fromIntegral a + V.length bs > fromIntegral bnd ->
        throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- getMut (mem^.miContent)
+        mv <- readMutVar (mem^.miContent)
         zipWithM_ (VM.write mv) [fromIntegral a..] (V.toList bs)
 
 effectiveAddress :: Monad m
@@ -169,7 +168,7 @@ effectiveAddress a o = do
     then throwError MemoryBoundsError
     else pure ea
 
-loadn :: (MonadRef m)
+loadn :: PrimMonad m
       => MemoryInst m -> Address -> Offset -> Size
       -> ExceptT MemoryError m Int64
 loadn mem a o n =
@@ -186,7 +185,7 @@ loadn mem a o n =
        b <- loadByte mem a'
        pure $ fromIntegral b .|. x
 
-storen :: (MonadRef m)
+storen :: PrimMonad m
        => MemoryInst m -> Address -> Offset -> Size -> Int64
        -> ExceptT MemoryError m ()
 storen mem a o n x =
@@ -217,7 +216,7 @@ doubleToBits x = runST (cast x)
 doubleFromBits :: Int64 -> Double
 doubleFromBits x = runST (cast x)
 
-loadValue :: (MonadRef m)
+loadValue :: (PrimMonad m)
           => MemoryInst m -> Address -> Offset -> ValueType
           -> ExceptT MemoryError m Value
 loadValue mem a o t =
@@ -227,7 +226,7 @@ loadValue mem a o t =
     F32Type -> Values.F32 (floatFromBits (fromIntegral n))
     F64Type -> Values.F64 (doubleFromBits n)
 
-storeValue :: (MonadRef m)
+storeValue :: (PrimMonad m)
            => MemoryInst m -> Address -> Offset -> Value
            -> ExceptT MemoryError m ()
 storeValue mem a o v =
@@ -244,7 +243,7 @@ extend x n = \case
   ZX -> x
   SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
 
-loadPacked :: (MonadRef m)
+loadPacked :: PrimMonad m
            => PackSize
            -> Extension
            -> MemoryInst m
@@ -262,7 +261,7 @@ loadPacked sz ext mem a o t =
       I64Type -> pure $ Values.I64 x
       _ -> throwError MemoryTypeError
 
-storePacked :: (MonadRef m)
+storePacked :: PrimMonad m
             => PackSize -> MemoryInst m -> Address -> Offset -> Value
             -> ExceptT MemoryError m ()
 storePacked sz mem a o v =

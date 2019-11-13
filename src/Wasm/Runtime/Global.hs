@@ -5,15 +5,17 @@
 module Wasm.Runtime.Global where
 
 import           Control.Monad.Except
+import           Control.Monad.Primitive
+import           Data.Primitive.MutVar
 import           Lens.Micro.Platform
+
 
 import           Wasm.Syntax.Types
 import           Wasm.Syntax.Values (Value)
-import           Wasm.Runtime.Mutable
 import qualified Wasm.Syntax.Values as Values
 
 data GlobalInst m = GlobalInst
-  { _giContent :: Mutable m Value
+  { _giContent :: MutVar (PrimState m) Value
   , _giMut :: Mutability
   }
 
@@ -27,30 +29,30 @@ data GlobalError
   | GlobalNotMutable
   deriving (Show, Eq)
 
-alloc :: (MonadRef m)
+alloc :: PrimMonad m
       => GlobalType -> Value -> ExceptT GlobalError m (GlobalInst m)
 alloc (GlobalType t mut) v =
   if Values.typeOf v /= t
   then throwError GlobalTypeError
   else do
-    m <- lift $ newMut v
+    m <- newMutVar v
     pure $ GlobalInst m mut
 
-typeOf :: (MonadRef m) => GlobalInst m -> m GlobalType
+typeOf :: PrimMonad m => GlobalInst m -> m GlobalType
 typeOf glob = do
-  content <- getMut (glob^.giContent)
+  content <- readMutVar (glob^.giContent)
   pure $ GlobalType (Values.typeOf content) (glob^.giMut)
 
-load :: MonadRef m => GlobalInst m -> m Value
-load glob = getMut (glob^.giContent)
+load :: PrimMonad m => GlobalInst m -> m Value
+load glob = readMutVar (glob^.giContent)
 
-store :: (MonadRef m)
+store :: PrimMonad m
       => GlobalInst m -> Value -> ExceptT GlobalError m ()
 store glob v = do
-  content <- lift $ getMut (glob^.giContent)
+  content <- readMutVar (glob^.giContent)
   case glob ^. giMut of
     Immutable -> throwError GlobalNotMutable
     Mutable
       | Values.typeOf v /= Values.typeOf content ->
         throwError GlobalTypeError
-      | otherwise -> lift $ setMut (glob^.giContent) v
+      | otherwise -> writeMutVar (glob^.giContent) v

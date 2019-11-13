@@ -48,7 +48,6 @@ Library
     Wasm.Binary.Lift
     Wasm.Exec.Eval
     Wasm.Exec.EvalNumeric
-    Wasm.Runtime.Mutable
     Wasm.Runtime.Func
     Wasm.Runtime.Global
     Wasm.Runtime.Instance
