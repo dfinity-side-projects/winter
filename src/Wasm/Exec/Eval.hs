@@ -14,6 +14,13 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 {-# OPTIONS_GHC -Wno-type-defaults #-}
 
+{-|
+An interpreter for wasm function.
+
+Note that although these functions are polymorphic in any 'PrimMonad',
+performance is best if the monad is plain 'IO' or 'ST s', and the 'f' paramter
+is 'Identity' or 'Phrase', due to judicious use of specialization.
+-}
 module Wasm.Exec.Eval
   ( initialize
   , invokeByName
@@ -481,6 +488,16 @@ instr vs at e' k = etaReaderT $ case (unFix e', vs) of
       -> (EvalCont Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
+{-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Phrase
+      -> (EvalCont Phrase IO r)
+      -> CEvalT Phrase IO r #-}
+
+{-# SPECIALIZE instr
+      :: Stack Value -> Region -> Instr Phrase
+      -> (EvalCont Phrase (ST s) r)
+      -> CEvalT Phrase (ST s) r #-}
+
 step :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> (Code f m -> CEvalT f m r) -> CEvalT f m r
 step c k' = etaReaderT $ case c of
@@ -586,6 +603,14 @@ step c k' = etaReaderT $ case c of
       :: Code Identity (ST s) -> (Code Identity (ST s) -> CEvalT Identity (ST s) r)
       -> CEvalT Identity (ST s) r #-}
 
+{-# SPECIALIZE step
+      :: Code Phrase IO -> (Code Phrase IO -> CEvalT Phrase IO r)
+      -> CEvalT Phrase IO r #-}
+
+{-# SPECIALIZE step
+      :: Code Phrase (ST s) -> (Code Phrase (ST s) -> CEvalT Phrase (ST s) r)
+      -> CEvalT Phrase (ST s) r #-}
+
 eval :: (Regioned f, MonadRef m, Show1 f)
      => Code f m -> CEvalT f m (Stack Value)
 eval c@(Code vs es) = etaReaderT $ case es of
@@ -599,6 +624,12 @@ eval c@(Code vs es) = etaReaderT $ case es of
 
 {-# SPECIALIZE eval
       :: Code Identity (ST s) -> CEvalT Identity (ST s) (Stack Value) #-}
+
+{-# SPECIALIZE eval
+      :: Code Phrase IO -> CEvalT Phrase IO (Stack Value) #-}
+
+{-# SPECIALIZE eval
+      :: Code Phrase (ST s) -> CEvalT Phrase (ST s) (Stack Value) #-}
 
 {- Functions & Constants -}
 
@@ -633,6 +664,20 @@ invoke mods inst func vs = do
       -> [Value]
       -> EvalT (ST s) [Value] #-}
 
+{-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Phrase IO)
+      -> ModuleInst Phrase IO
+      -> ModuleFunc Phrase IO
+      -> [Value]
+      -> EvalT IO [Value] #-}
+
+{-# SPECIALIZE invoke
+      :: IntMap (ModuleInst Phrase (ST s))
+      -> ModuleInst Phrase (ST s)
+      -> ModuleFunc Phrase (ST s)
+      -> [Value]
+      -> EvalT (ST s) [Value] #-}
+
 invokeByName :: (Regioned f, MonadRef m, Show1 f)
              => IntMap (ModuleInst f m) -> ModuleInst f m -> Text -> [Value]
              -> EvalT m [Value]
@@ -651,15 +696,20 @@ invokeByName mods inst name vs = do
       :: IntMap (ModuleInst Identity (ST s))
       -> ModuleInst Identity (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
 
+{-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Phrase IO)
+      -> ModuleInst Phrase IO -> Text -> [Value] -> EvalT IO [Value] #-}
+
+{-# SPECIALIZE invokeByName
+      :: IntMap (ModuleInst Phrase (ST s))
+      -> ModuleInst Phrase (ST s) -> Text -> [Value] -> EvalT (ST s) [Value] #-}
+
 getByName :: (Regioned f, Show1 f, MonadRef m)
           => ModuleInst f m -> Text -> EvalT m Value
 getByName inst name = case inst ^. miExports.at name of
   Just (ExternGlobal g) -> lift $ getMut (g^.Global.giContent)
   e -> throwError $ EvalCrashError def $
     "Cannot get exported global " ++ unpack name ++ ": " ++ show e
-
-{-# SPECIALIZE getByName
-      :: ModuleInst Identity IO -> Text -> EvalT IO Value #-}
 
 evalConst :: (Regioned f, MonadRef m, Show1 f)
           => IntMap (ModuleInst f m)
@@ -841,6 +891,24 @@ initialize (value -> mod) names mods = do
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Identity IO)
            -> EvalT IO (ModuleRef, ModuleInst Identity IO) #-}
+
+{-# SPECIALIZE initialize
+           :: Identity (Module Identity)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Identity (ST s))
+           -> EvalT (ST s) (ModuleRef, ModuleInst Identity (ST s)) #-}
+
+{-# SPECIALIZE initialize
+           :: Phrase (Module Phrase)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Phrase IO)
+           -> EvalT IO (ModuleRef, ModuleInst Phrase IO) #-}
+
+{-# SPECIALIZE initialize
+           :: Phrase (Module Phrase)
+           -> Map Text ModuleRef
+           -> IntMap (ModuleInst Phrase (ST s))
+           -> EvalT (ST s) (ModuleRef, ModuleInst Phrase (ST s)) #-}
 
 nextKey :: IntMap a -> IM.Key
 nextKey m = go (max 1 (IM.size m))
