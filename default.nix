@@ -1,7 +1,7 @@
-{ compiler ? "ghc844"
+{ compiler ? "ghc864"
 
-, rev    ? "e1ad1a0aa2ce6f9fd951d18181ba850ca8e74133"
-, sha256 ? "0vk5sjmbq52xfrinrhvqry53asl6ppwbly1l7ymj8g0j4pkjf7p1"
+, rev    ? "e0c7712eac67c6b820d9d1020f46bac96fd8cede"
+, sha256 ? "08rcnqxkninl5a560ss39s4nbqf0a677q6qh1fh7i0lr9pxf6aan"
 
 , pkgs   ?
     if builtins.compareVersions builtins.nixVersion "2.0" < 0
