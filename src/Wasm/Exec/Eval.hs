@@ -27,6 +27,8 @@ module Wasm.Exec.Eval
   , getByName
   , createHostFunc
   , createHostFuncEff
+  , elem
+  , invoke
   ) where
 
 import           Control.Exception
