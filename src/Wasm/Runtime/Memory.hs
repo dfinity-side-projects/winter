@@ -5,7 +5,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 module Wasm.Runtime.Memory
-  ( MemoryInst
+  ( MemoryInst(..)
   , doubleFromBits, doubleToBits
   , floatFromBits, floatToBits
   , typeOf
