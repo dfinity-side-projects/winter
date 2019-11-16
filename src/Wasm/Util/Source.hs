@@ -19,7 +19,7 @@ import           GHC.Generics
 import           Lens.Micro.Platform
 import           Text.Printf
 
-infixl 5 @@
+infixl 6 @@
 
 class Traversable phrase => Regioned phrase where
   region :: phrase a -> Region
