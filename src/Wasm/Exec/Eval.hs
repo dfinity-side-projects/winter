@@ -35,7 +35,6 @@ import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Trans.Reader hiding (local)
-import qualified Control.Monad.Trans.Reader as Reader
 import           Control.Monad.Trans.State
 import           Control.Monad.Identity
 import           Control.Monad.Primitive
@@ -54,7 +53,6 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Text.Lazy (Text, unpack)
 import qualified Data.Vector as V
-import           GHC.Exts (oneShot)
 import           Lens.Micro.Platform
 import           Prelude hiding (lookup, elem)
 import           Text.Show (showListWith)
@@ -125,8 +123,24 @@ instance Show (Frame f m) where
 
 makeLenses ''Frame
 
+{-
+In a change from the reference interpreter, where the small-step relation works
+on just a value and instruction set, we introduce a control stack as well. This
+gives a significant performance boost.
+
+We also keep track of the current 'Config' (esp 'configFrame') here.
+-}
+
+data Control f m
+  = EmptyCS
+  | Label !Int !(DList (f (AdminInstr f m))) (Code f m)
+  | Framed !Int (Code f m)
+    -- ^ the frame is the _previous_ frame, to restore when popping this control
+
 data Code f m = Code
-  { _codeStack  :: !(Stack Value)
+  { _codeControl  :: !(Control f m)
+  , _codeConfig  :: !(Config f m)
+  , _codeStack  :: !(Stack Value)
   , _codeInstrs :: ![f (AdminInstr f m)]
   }
 
@@ -134,6 +148,10 @@ instance (Regioned f, Show1 f) => Show (Code f m) where
   showsPrec d Code {..} =
     showParen (d > 10)
       $ showString "Code "
+      . showsPrec 11 _codeControl
+      -- . showString " "
+      -- . showsPrec 11 _codeConfig
+      . showString " "
       . showsPrec 11 _codeStack
       . showString " "
       . showListWith (showsPrec1 11) _codeInstrs
@@ -145,8 +163,19 @@ data AdminInstr f m
   | Trapping !String
   | Returning !(Stack Value)
   | Breaking !Int !(Stack Value)
-  | Label !Int !(DList (f (AdminInstr f m))) !(Code f m)
-  | Framed !Int !(Frame f m) !(Code f m)
+
+instance (Regioned f, Show1 f) => Show (Control f m) where
+  showsPrec d = showParen (d > 10) . \case
+    EmptyCS -> showString "EmptyCS"
+    Label i l c -> showString "Label "     . showsPrec 11 i
+                                           . showString " "
+                                           . showListWith (showsPrec1 11) (l [])
+                                           . showString " "
+                                           . showsPrec 11 c
+    Framed i c -> showString "Framed "   . showsPrec 11 i
+                                         . showString " "
+                                         . showsPrec 11 c
+
 
 instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
   showsPrec d = showParen (d > 10) . \case
@@ -157,16 +186,6 @@ instance (Regioned f, Show1 f) => Show (AdminInstr f m) where
     Breaking i s -> showString "Breaking "  . showsPrec 11 i
                                            . showString " "
                                            . showsPrec1 11 s
-    Label i l c  -> showString "Label "     . showsPrec 11 i
-                                           . showString " "
-                                           . showListWith (showsPrec1 11) (l [])
-                                           . showString " "
-                                           . showsPrec 11 c
-    Framed i f c -> showString "Framed "    . showsPrec 11 i
-                                           . showString " "
-                                           . showsPrec 11 f
-                                           . showString " "
-                                           . showsPrec 11 c
 
 data Config f m = Config
   { _configModules :: !(IntMap (ModuleInst f m))
@@ -176,8 +195,8 @@ data Config f m = Config
 
 makeLenses ''Config
 
-type EvalT m a = ExceptT EvalError m a
-type CEvalT f m a = ReaderT (Config f m) (ExceptT EvalError m) a
+type EvalT = ExceptT EvalError
+type CEvalT f m = ReaderT (Config f m) (EvalT m)
 
 getInst :: Monad m => ModuleRef -> CEvalT f m (ModuleInst f m)
 getInst ref = do
@@ -287,29 +306,32 @@ checkTypes at ts xs = forM_ (partialZip ts xs) $ \case
  *   c : config
  -}
 
--- Make sure that our use of ReaderT does not get in the way of
--- eta-expansion. See
--- https://twitter.com/nomeata/status/1192731874248077312
-etaReaderT :: ReaderT r m a -> ReaderT r m a
-etaReaderT = ReaderT . oneShot . runReaderT
-
-step :: (Regioned f, PrimMonad m, Show1 f)
-     => Code f m -> CEvalT f m (Code f m)
-step c = etaReaderT $ case c of
-  Code _ [] -> error "Cannot step without instructions"
-  Code vs (e:es) ->
+step :: (Regioned f, PrimMonad m)
+     => Code f m -> EvalT m (Code f m)
+step (Code cs _ vs []) = case cs of
+    EmptyCS -> error "Cannot step without instructions"
+    Label _ _ code' -> {-# SCC step_Label1 #-}
+        return $ code' { _codeStack = vs ++ _codeStack code' }
+    Framed _ code' -> {-# SCC step_Framed1 #-}
+        return $ code' { _codeStack = vs ++ _codeStack code' }
+step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
     let at = region e
-        k vs es = return $ Code vs es
-    in case value e of
-      Plain e' -> {-# SCC step_Plain #-} case (unFix e', vs) of
+        -- short form for stepping with the current control stack
+        k vs es = return $ Code cs cfg vs es
+    case (cs, value e) of
+      (_, Plain e') -> {-# SCC step_Plain #-} case (unFix e', vs) of
         (Unreachable, vs)              -> {-# SCC step_Unreachable #-}
           k vs (Trapping "unreachable executed" @@ at : es)
         (Nop, vs)                      -> {-# SCC step_Nop #-}
           k vs es
         (Block ts es', vs)             -> {-# SCC step_Block #-}
-          k vs (Label (length ts) id (Code [] (map plain es')) @@ at : es)
+          return $ Code
+            (Label (length ts) id (Code cs cfg vs es))
+            cfg [] (map plain es')
         (Loop _ es', vs)               -> {-# SCC step_Loop #-}
-          k vs (Label 0 ((plain $ e' @@ at):) (Code [] (map plain es')) @@ at : es)
+          return $ Code
+            (Label 0 (e :) (Code cs cfg vs es))
+            cfg [] (map plain es')
         (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
           k vs' (Plain (Fix (Block ts es2)) @@ at : es)
         (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
@@ -326,7 +348,7 @@ step c = etaReaderT $ case c of
           | otherwise -> {-# SCC step_BrTable2 #-}
             k vs' (Plain (Fix (Br (xs !! fromIntegral i))) @@ at : es)
         (Return, vs)                   -> {-# SCC step_Return #-}
-          k vs (Returning vs @@ at : es)
+          k [] (Returning vs @@ at : es)
 
         (Call x, vs) -> {-# SCC step_Call #-} do
           inst <- getFrameInst
@@ -483,43 +505,35 @@ step c = etaReaderT $ case c of
           throwError $ EvalCrashError at
             ("missing or ill-typed operand on stack (" ++ s1 ++ " : " ++ s2 ++ ")")
 
-      Trapping msg -> {-# SCC step_Trapping #-}
+      (EmptyCS, Trapping msg) -> {-# SCC step_Trapping #-}
         throwError $ EvalTrapError at msg
-      Returning _  -> {-# SCC step_Returning #-}
+      (EmptyCS, Returning _)  -> {-# SCC step_Returning #-}
         throwError $ EvalCrashError at "undefined frame"
-      Breaking _ _ -> {-# SCC step_Breaking #-}
+      (EmptyCS, Breaking _ _) -> {-# SCC step_Breaking #-}
         throwError $ EvalCrashError at "undefined label"
 
-      Label _ _ (Code vs' []) -> {-# SCC step_Label1 #-}
-        k (vs' ++ vs) es
-      Label n es0 code'@(Code _ (t@(value -> c) : _)) -> {-# SCC step_Label2 #-}
-        case c of
-          Trapping msg -> {-# SCC step_Label3 #-}
-            k vs (Trapping msg @@ region t : es)
-          Returning vs0 -> {-# SCC step_Label4 #-}
-            k vs (Returning vs0 @@ region t : es)
-          Breaking 0 vs0 -> {-# SCC step_Label5 #-} do
-            vs0' <- lift $ takeFrom n vs0 at
-            k (vs0' ++ vs) (es0 es)
-          Breaking bk vs0 -> {-# SCC step_Label6 #-}
-            k vs (Breaking (bk - 1) vs0 @@ at : es)
-          _ -> {-# SCC step_Label7 #-} do
-            res <- step code'
-            k vs (Label n es0 res @@ at : es)
-
-      Framed _ _ (Code vs' []) -> {-# SCC step_Framed1 #-}
-        k (vs' ++ vs) es
-      Framed _ _ (Code _ (t@(value -> Trapping msg) : _)) -> {-# SCC step_Framed2 #-}
-        k vs (Trapping msg @@ region t : es)
-      Framed n _ (Code _ ((value -> Returning vs0) : _)) -> {-# SCC step_Framed3 #-} do
+      (Label _ _ code', Trapping msg) -> {-# SCC step_Label_Trap #-}
+        return $ code' { _codeInstrs = Trapping msg @@ at : _codeInstrs code' }
+      (Label _ _ code', Returning vs0) -> {-# SCC step_Label_Return #-}
+        return $ code' { _codeInstrs = Returning vs0 @@ at : _codeInstrs code' }
+      (Label n es0 code', Breaking 0 vs0) -> {-# SCC step_Label_Break1 #-} do
         vs0' <- lift $ takeFrom n vs0 at
-        k (vs0' ++ vs) es
-      Framed n frame' code' -> {-# SCC step_Framed4 #-}
-        Reader.local (\c -> c & configFrame .~ frame' & configBudget %~ pred) $ do
-          res <- step code'
-          k vs (Framed n frame' res @@ at : es)
+        return $ code'
+            { _codeStack = vs0' ++ _codeStack code'
+            , _codeInstrs = es0 $ _codeInstrs code'
+            }
+      (Label _ _ code', Breaking bk vs0) -> {-# SCC step_Label_Break2 #-}
+        return $ code' { _codeInstrs = Breaking (bk - 1) vs0 @@ at : _codeInstrs code' }
 
-      Invoke func -> {-# SCC step_Invoke #-} do
+      (Framed _ code', Trapping msg) -> {-# SCC step_Framed_Trap #-}
+        return $ code' { _codeInstrs = Trapping msg @@ at : _codeInstrs code' }
+      (Framed n code', Returning vs0) -> {-# SCC step_Framed_Return #-} do
+        vs0' <- lift $ takeFrom n vs0 at
+        return $ code' { _codeStack = vs0' ++ _codeStack code' }
+      (Framed _ _, Breaking _ _) -> {-# SCC step_Framed_Break #-}
+        throwError $ EvalCrashError at "undefined label"
+
+      (_, Invoke func) -> {-# SCC step_Invoke #-} do
         budget <- view configBudget
         when (budget == 0) $
           throwError $ EvalExhaustionError at "call stack exhausted"
@@ -544,9 +558,11 @@ step c = etaReaderT $ case c of
             inst' <- getInst ref
             locals' <- traverse newMutVar $
               args ++ map defaultValue (value f^.funcLocals)
-            let code' = Code [] [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
-                frame' = Frame inst' locals'
-            k vs' (Framed (length outs) frame' code' @@ at : es)
+            return $ Code
+                (Framed (length outs) (Code cs cfg vs' es))
+                (cfg & configFrame .~ Frame inst' locals' & configBudget %~ pred)
+                []
+                [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
 
           Func.HostFunc _ f -> do
             -- jww (2018-11-01): Need an exception handler here, so we can
@@ -569,23 +585,20 @@ step c = etaReaderT $ case c of
                 -- try (reverse (f args) ++ vs', [])
                 -- with Crash (_, msg) -> EvalCrashError at msg)
 
-{-# SPECIALIZE step :: Code Identity IO -> CEvalT Identity IO (Code Identity IO) #-}
-{-# SPECIALIZE step :: Code Identity (ST s) -> CEvalT Identity (ST s) (Code Identity (ST s)) #-}
-{-# SPECIALIZE step :: Code Phrase IO -> CEvalT Phrase IO (Code Phrase IO) #-}
-{-# SPECIALIZE step :: Code Phrase (ST s) -> CEvalT Phrase (ST s) (Code Phrase (ST s)) #-}
+{-# SPECIALIZE step :: Code Identity IO -> EvalT IO (Code Identity IO) #-}
+{-# SPECIALIZE step :: Code Identity (ST s) -> EvalT (ST s) (Code Identity (ST s)) #-}
+{-# SPECIALIZE step :: Code Phrase IO -> EvalT IO (Code Phrase IO) #-}
+{-# SPECIALIZE step :: Code Phrase (ST s) -> EvalT (ST s) (Code Phrase (ST s)) #-}
 
 eval :: (Regioned f, PrimMonad m, Show1 f)
-     => Code f m -> CEvalT f m (Stack Value)
-eval c@(Code vs es) = etaReaderT $ case es of
-  [] -> pure vs
-  t@(value -> Trapping msg) : _ ->
-    throwError $ EvalTrapError (region t) msg
-  _ -> step c >>= eval
+     => Code f m -> EvalT m (Stack Value)
+eval (Code EmptyCS _ vs []) = return vs
+eval c = step c >>= eval
 
-{-# SPECIALIZE eval :: Code Identity IO -> CEvalT Identity IO (Stack Value) #-}
-{-# SPECIALIZE eval :: Code Identity (ST s) -> CEvalT Identity (ST s) (Stack Value) #-}
-{-# SPECIALIZE eval :: Code Phrase IO -> CEvalT Phrase IO (Stack Value) #-}
-{-# SPECIALIZE eval :: Code Phrase (ST s) -> CEvalT Phrase (ST s) (Stack Value) #-}
+{-# SPECIALIZE eval :: Code Identity IO -> EvalT IO (Stack Value) #-}
+{-# SPECIALIZE eval :: Code Identity (ST s) -> EvalT (ST s) (Stack Value) #-}
+{-# SPECIALIZE eval :: Code Phrase IO -> EvalT IO (Stack Value) #-}
+{-# SPECIALIZE eval :: Code Phrase (ST s) -> EvalT (ST s) (Stack Value) #-}
 
 {- Functions & Constants -}
 
@@ -599,9 +612,8 @@ invoke mods inst func vs = do
   let (at, inst') = case func of
         Func.AstFunc _ i f -> (region f, mods^?!ix i)
         _ -> (def, inst)
-  reverse <$> runReaderT
-    (eval (Code (reverse vs) [Invoke func @@ at]))
-    (newConfig mods inst')
+  let cfg = newConfig mods inst'
+  reverse <$> eval (Code EmptyCS cfg (reverse vs) [Invoke func @@ at])
   -- jww (2018-11-01): How do we detect stack overflow?
   -- reverse (eval c) with Stack_overflow ->
   --   Exhaustion.error at "call stack exhausted"
@@ -671,9 +683,8 @@ evalConst :: (Regioned f, PrimMonad m, Show1 f)
           => IntMap (ModuleInst f m)
           -> ModuleInst f m -> Expr f -> EvalT m Value
 evalConst mods inst expr = do
-  xs <- runReaderT
-    (eval (Code [] (map plain (value expr))))
-    (newConfig mods inst)
+  let cfg = newConfig mods inst
+  xs <- eval (Code EmptyCS cfg [] (map plain (value expr)))
   case xs of
     [v] -> pure v
     _ -> throwError $
