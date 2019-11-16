@@ -128,6 +128,15 @@ In a change from the reference interpreter, where the small-step relation works
 on just a value and instruction set, we introduce a control stack as well. This
 gives a significant performance boost.
 
+The correspondence between their and our 'Code' type is the following:
+
+    Wasm:   (vs1, Label n les (vs2, es2) :: es1)
+    Winter: Code cfg1 (Label n les les (Code … cfg2 vs1 es1)) vs2 es2
+
+The point is that now es2 (the instruction to execute next) is nicely exposed
+for O(1) analsys, instead of hidden deep in the Code data structure. On
+can also think of this as a zipper.
+
 We also keep track of the current 'Config' (esp 'configFrame') here.
 -}
 
