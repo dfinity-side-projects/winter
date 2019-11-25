@@ -32,6 +32,7 @@ import           Data.Bits
 import           Data.Int
 import           Data.Primitive.MutVar
 import           Data.Primitive.ByteArray
+import           Data.Primitive.ByteArray.Unaligned
 import           Data.Vector (Vector)
 import qualified Data.Vector as V
 import           Data.Word
@@ -122,6 +123,7 @@ grow mem delta = do
         fillByteArray m' oldSizeBytes (newSizeBytes - oldSizeBytes) 0
         writeMutVar (mem^.miContent) m'
 
+-- Byte-wise access
 
 loadByte :: PrimMonad m
          => MemoryInst m -> Address -> ExceptT MemoryError m Word8
@@ -137,11 +139,13 @@ storeByte :: PrimMonad m
           -> ExceptT MemoryError m ()
 storeByte mem a b = do
   bnd <- lift $ bound mem
-  if | a >= fromIntegral bnd ->
-       throwError MemoryBoundsError
-     | otherwise -> lift $ do
-        m <- readMutVar (mem^.miContent)
-        writeByteArray m (fromIntegral a) b
+  when (a >= fromIntegral bnd) $
+    throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    writeByteArray m (fromIntegral a) b
+
+-- Vector access
 
 loadBytes :: PrimMonad m
           => MemoryInst m -> Address -> Size
@@ -154,11 +158,13 @@ storeBytes :: PrimMonad m
            -> ExceptT MemoryError m ()
 storeBytes mem a bs = do
   bnd <- lift $ bound mem
-  if | fromIntegral a + V.length bs > fromIntegral bnd ->
+  when (fromIntegral a + V.length bs > fromIntegral bnd) $
        throwError MemoryBoundsError
-     | otherwise -> lift $ do
-        m <- readMutVar (mem^.miContent)
-        zipWithM_ (writeByteArray m) [fromIntegral a..] (V.toList bs)
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    zipWithM_ (writeByteArray m) [fromIntegral a..] (V.toList bs)
+
+-- Value access
 
 effectiveAddress :: Monad m
                  => Address -> Offset -> ExceptT MemoryError m Address
@@ -167,6 +173,46 @@ effectiveAddress a o = do
   if ea < a
     then throwError MemoryBoundsError
     else pure ea
+
+loadValue :: (PrimMonad m)
+          => MemoryInst m -> Address -> Offset -> ValueType
+          -> ExceptT MemoryError m Value
+loadValue mem a o t = do
+  bnd <- lift $ bound mem
+  addr <- effectiveAddress a o
+  when (addr + fromIntegral (valueTypeSize t) > fromIntegral bnd) $
+    throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    case t of
+      I32Type -> Values.I32 <$> readUnalignedByteArray m (fromIntegral addr)
+      I64Type -> Values.I64 <$> readUnalignedByteArray m (fromIntegral addr)
+      F32Type -> Values.F32 <$> readUnalignedByteArray m (fromIntegral addr)
+      F64Type -> Values.F64 <$> readUnalignedByteArray m (fromIntegral addr)
+
+storeValue :: (PrimMonad m)
+           => MemoryInst m -> Address -> Offset -> Value
+           -> ExceptT MemoryError m ()
+storeValue mem a o v = do
+  bnd <- lift $ bound mem
+  addr <- effectiveAddress a o
+  when (addr + fromIntegral (valueTypeSize (Values.typeOf v)) > fromIntegral bnd) $
+    throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    case v of
+      Values.I32 y -> writeUnalignedByteArray m (fromIntegral addr) y
+      Values.I64 y -> writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F32 y -> writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F64 y -> writeUnalignedByteArray m (fromIntegral addr) y
+
+-- Packed access
+
+-- jww (2018-10-31): Is this type signature correct?
+extend :: Address -> Offset -> Extension -> Address
+extend x n = \case
+  ZX -> x
+  SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
 
 loadn :: PrimMonad m
       => MemoryInst m -> Address -> Offset -> Size
@@ -199,49 +245,6 @@ storen mem a o n x =
       loop (a' + 1) (n' - 1) (shiftR x' 8)
       storeByte mem a' (fromIntegral x' .&. 0xff)
 
-cast :: (MArray (STUArray s) a (ST s), MArray (STUArray s) b (ST s))
-     => a -> ST s b
-cast x = newArray (0 :: Int, 0) x >>= castSTUArray >>= flip readArray 0
-{-# INLINE cast #-}
-
-floatToBits :: Float -> Int32
-floatToBits x = runST (cast x)
-
-floatFromBits :: Int32 -> Float
-floatFromBits x = runST (cast x)
-
-doubleToBits :: Double -> Int64
-doubleToBits x = runST (cast x)
-
-doubleFromBits :: Int64 -> Double
-doubleFromBits x = runST (cast x)
-
-loadValue :: (PrimMonad m)
-          => MemoryInst m -> Address -> Offset -> ValueType
-          -> ExceptT MemoryError m Value
-loadValue mem a o t =
-  loadn mem a o (valueTypeSize t) >>= \n -> pure $ case t of
-    I32Type -> Values.I32 (fromIntegral n)
-    I64Type -> Values.I64 n
-    F32Type -> Values.F32 (floatFromBits (fromIntegral n))
-    F64Type -> Values.F64 (doubleFromBits n)
-
-storeValue :: (PrimMonad m)
-           => MemoryInst m -> Address -> Offset -> Value
-           -> ExceptT MemoryError m ()
-storeValue mem a o v =
-  let x = case v of
-        Values.I32 y -> fromIntegral y
-        Values.I64 y -> y
-        Values.F32 y -> fromIntegral $ floatToBits y
-        Values.F64 y -> doubleToBits y
-  in storen mem a o (valueTypeSize (Values.typeOf v)) x
-
--- jww (2018-10-31): Is this type signature correct?
-extend :: Address -> Offset -> Extension -> Address
-extend x n = \case
-  ZX -> x
-  SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
 
 loadPacked :: PrimMonad m
            => PackSize
@@ -272,3 +275,23 @@ storePacked sz mem a o v =
           Values.I64 y -> pure y
           _ -> throwError MemoryTypeError
     storen mem a o n x
+
+-- Conversions used in "Wasm.Exec.EvalNumeric"
+
+cast :: (MArray (STUArray s) a (ST s), MArray (STUArray s) b (ST s))
+     => a -> ST s b
+cast x = newArray (0 :: Int, 0) x >>= castSTUArray >>= flip readArray 0
+{-# INLINE cast #-}
+
+floatToBits :: Float -> Int32
+floatToBits x = runST (cast x)
+
+floatFromBits :: Int32 -> Float
+floatFromBits x = runST (cast x)
+
+doubleToBits :: Double -> Int64
+doubleToBits x = runST (cast x)
+
+doubleFromBits :: Int64 -> Double
+doubleFromBits x = runST (cast x)
+
