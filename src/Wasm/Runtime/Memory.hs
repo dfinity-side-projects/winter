@@ -3,6 +3,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Wasm.Runtime.Memory
   ( MemoryInst(..)
@@ -28,7 +29,6 @@ import           Control.Monad.Except
 import           Control.Monad.Primitive
 import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Array.Unsafe (castSTUArray)
-import           Data.Bits
 import           Data.Int
 import           Data.Primitive.MutVar
 import           Data.Primitive.ByteArray
@@ -134,17 +134,6 @@ loadByte mem a = do
         m <- readMutVar (mem^.miContent)
         readByteArray m (fromIntegral a)
 
-storeByte :: PrimMonad m
-          => MemoryInst m -> Address -> Word8
-          -> ExceptT MemoryError m ()
-storeByte mem a b = do
-  bnd <- lift $ bound mem
-  when (a >= fromIntegral bnd) $
-    throwError MemoryBoundsError
-  lift $ do
-    m <- readMutVar (mem^.miContent)
-    writeByteArray m (fromIntegral a) b
-
 -- Vector access
 
 loadBytes :: PrimMonad m
@@ -208,44 +197,6 @@ storeValue mem a o v = do
 
 -- Packed access
 
--- jww (2018-10-31): Is this type signature correct?
-extend :: Address -> Offset -> Extension -> Address
-extend x n = \case
-  ZX -> x
-  SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
-
-loadn :: PrimMonad m
-      => MemoryInst m -> Address -> Offset -> Size
-      -> ExceptT MemoryError m Int64
-loadn mem a o n =
-  assert (n > 0 && n <= 8) $ do
-    addr <- effectiveAddress a o
-    loop addr n
- where
-  loop a' n' =
-     if n' == 0
-     then pure 0
-     else do
-       r <- loop (a' + 1) (n' - 1)
-       let x = shiftL r 8
-       b <- loadByte mem a'
-       pure $ fromIntegral b .|. x
-
-storen :: PrimMonad m
-       => MemoryInst m -> Address -> Offset -> Size -> Int64
-       -> ExceptT MemoryError m ()
-storen mem a o n x =
-  assert (n > 0 && n <= 8) $ do
-    addr <- effectiveAddress a o
-    loop addr n x
- where
-  loop a' n' x'
-    | n' <= 0 = return ()
-    | otherwise = do
-      loop (a' + 1) (n' - 1) (shiftR x' 8)
-      storeByte mem a' (fromIntegral x' .&. 0xff)
-
-
 loadPacked :: PrimMonad m
            => PackSize
            -> Extension
@@ -254,27 +205,52 @@ loadPacked :: PrimMonad m
            -> Offset
            -> ValueType
            -> ExceptT MemoryError m Value
-loadPacked sz ext mem a o t =
-  assert (packedSize sz <= valueTypeSize t) $ do
-    let n = packedSize sz
-    v <- loadn mem a o n
-    let x = extend v n ext
+loadPacked sz ext mem a o t = do
+  let n = packedSize sz
+  assert (n <= valueTypeSize t) $ do
+    bnd <- lift $ bound mem
+    addr <- effectiveAddress a o
+    when (addr + fromIntegral n > fromIntegral bnd) $
+      throwError MemoryBoundsError
+    m <- lift $ readMutVar (mem^.miContent)
     case t of
-      I32Type -> pure $ Values.I32 (fromIntegral x)
-      I64Type -> pure $ Values.I64 x
+      I32Type -> lift $ Values.I32 <$> case (ext, sz) of
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> readUnalignedByteArray m (fromIntegral addr)
+      I64Type -> lift $ Values.I64 <$> case (ext, sz) of
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> readUnalignedByteArray m (fromIntegral addr)
       _ -> throwError MemoryTypeError
 
 storePacked :: PrimMonad m
             => PackSize -> MemoryInst m -> Address -> Offset -> Value
             -> ExceptT MemoryError m ()
-storePacked sz mem a o v =
-  assert (packedSize sz <= valueTypeSize (Values.typeOf v)) $ do
-    let n = packedSize sz
-    x <- case v of
-          Values.I32 y -> pure $ fromIntegral y
-          Values.I64 y -> pure y
-          _ -> throwError MemoryTypeError
-    storen mem a o n x
+storePacked sz mem a o v = do
+  let n = packedSize sz
+  assert (n <= valueTypeSize (Values.typeOf v)) $ do
+    bnd <- lift $ bound mem
+    addr <- effectiveAddress a o
+    when (addr + fromIntegral n > fromIntegral bnd) $
+      throwError MemoryBoundsError
+    m <- lift $ readMutVar (mem^.miContent)
+    case v of
+      Values.I32 y -> lift $ case sz of
+        Pack8  -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+      Values.I64 y -> lift $ case sz of
+        Pack8  -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+      _ -> throwError MemoryTypeError
 
 -- Conversions used in "Wasm.Exec.EvalNumeric"
 
