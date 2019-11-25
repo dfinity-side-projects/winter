@@ -31,10 +31,9 @@ import           Data.Array.Unsafe (castSTUArray)
 import           Data.Bits
 import           Data.Int
 import           Data.Primitive.MutVar
+import           Data.Primitive.ByteArray
 import           Data.Vector (Vector)
 import qualified Data.Vector as V
-import           Data.Vector.Unboxed.Mutable (MVector)
-import qualified Data.Vector.Unboxed.Mutable as VM
 import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
@@ -45,7 +44,7 @@ import           Wasm.Syntax.Values (Value)
 import qualified Wasm.Syntax.Values as Values
 
 data MemoryInst m = MemoryInst
-  { _miContent :: MutVar (PrimState m) (MVector (PrimState m) Word8)
+  { _miContent :: MutVar (PrimState m) (MutableByteArray (PrimState m))
   , _miMax :: Maybe Size
   }
 
@@ -76,27 +75,27 @@ withinLimits n = \case
   Nothing -> True
   Just m -> n <= m
 
-create :: PrimMonad m => Size -> m (Either MemoryError (MVector (PrimState m) Word8))
+create :: PrimMonad m => Size -> ExceptT MemoryError m (MutableByteArray (PrimState m))
 create n
-  | n > 0x10000 = return $ Left MemorySizeOverflow
-  | otherwise   = Right <$> VM.replicate (fromIntegral (n * pageSize)) 0
+  | n > 0x10000 = throwError MemorySizeOverflow
+  | otherwise   = lift $ do
+    m <- newByteArray (fromIntegral $ n * pageSize)
+    fillByteArray m 0 (fromIntegral $ n * pageSize) 0
+    return m
 
 alloc :: PrimMonad m
       => MemoryType -> ExceptT MemoryError m (MemoryInst m)
-alloc (Limits min' mmax) = create min' >>= \case
-  Left err -> throwError err
-  Right m -> do
-    mem <- newMutVar m
-    pure $ assert (withinLimits min' mmax) $
-      MemoryInst
-        { _miContent = mem
-        , _miMax = mmax
-        }
+alloc (Limits min' mmax) = do
+  m <- create min'
+  mem <- newMutVar m
+  pure $ assert (withinLimits min' mmax) $
+    MemoryInst { _miContent = mem , _miMax = mmax }
 
 bound :: PrimMonad m => MemoryInst m -> m Size
 bound mem = do
   m <- readMutVar (mem^.miContent)
-  pure $ fromIntegral $ VM.length m
+  b <- getSizeofMutableByteArray m
+  pure $ fromIntegral b
 
 size :: PrimMonad m => MemoryInst m -> m Size
 size mem = liftM2 div (bound mem) (pure pageSize)
@@ -109,6 +108,8 @@ grow :: PrimMonad m
 grow mem delta = do
   oldSize <- lift $ size mem
   let newSize = oldSize + delta
+  let oldSizeBytes = fromIntegral $ oldSize * pageSize
+  let newSizeBytes = fromIntegral $ newSize * pageSize
   if | oldSize > newSize ->
          throwError MemorySizeOverflow
      | not (withinLimits newSize (mem^.miMax)) ->
@@ -116,21 +117,20 @@ grow mem delta = do
      | newSize > 0x10000 ->
          throwError MemorySizeOverflow
      | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        mv' <- VM.grow mv (fromIntegral (delta * pageSize))
-        forM_ [oldSize * pageSize .. newSize * pageSize - 1] $ \i ->
-          VM.write mv' (fromIntegral i) 0
-        writeMutVar (mem^.miContent) mv'
+        m <- readMutVar (mem^.miContent)
+        m' <- resizeMutableByteArray m newSizeBytes
+        fillByteArray m' oldSizeBytes (newSizeBytes - oldSizeBytes) 0
+        writeMutVar (mem^.miContent) m'
+
 
 loadByte :: PrimMonad m
          => MemoryInst m -> Address -> ExceptT MemoryError m Word8
 loadByte mem a = do
   bnd <- lift $ bound mem
-  if | a >= fromIntegral bnd ->
-       throwError MemoryBoundsError
+  if | a >= fromIntegral bnd -> throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        VM.read mv (fromIntegral a)
+        m <- readMutVar (mem^.miContent)
+        readByteArray m (fromIntegral a)
 
 storeByte :: PrimMonad m
           => MemoryInst m -> Address -> Word8
@@ -140,8 +140,8 @@ storeByte mem a b = do
   if | a >= fromIntegral bnd ->
        throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        VM.write mv (fromIntegral a) b
+        m <- readMutVar (mem^.miContent)
+        writeByteArray m (fromIntegral a) b
 
 loadBytes :: PrimMonad m
           => MemoryInst m -> Address -> Size
@@ -157,8 +157,8 @@ storeBytes mem a bs = do
   if | fromIntegral a + V.length bs > fromIntegral bnd ->
        throwError MemoryBoundsError
      | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        zipWithM_ (VM.write mv) [fromIntegral a..] (V.toList bs)
+        m <- readMutVar (mem^.miContent)
+        zipWithM_ (writeByteArray m) [fromIntegral a..] (V.toList bs)
 
 effectiveAddress :: Monad m
                  => Address -> Offset -> ExceptT MemoryError m Address
