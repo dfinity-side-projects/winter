@@ -32,7 +32,8 @@ import           Data.Array.Unsafe (castSTUArray)
 import           Data.Int
 import           Data.Primitive.MutVar
 import           Data.Primitive.ByteArray
-import           Data.Primitive.ByteArray.Unaligned
+import qualified Data.Primitive.ByteArray.Unaligned    as UABA
+import qualified Data.Primitive.ByteArray.LittleEndian as LEBA
 import           Data.Vector (Vector)
 import qualified Data.Vector as V
 import           Data.Word
@@ -174,10 +175,10 @@ loadValue mem a o t = do
   lift $ do
     m <- readMutVar (mem^.miContent)
     case t of
-      I32Type -> Values.I32 <$> readUnalignedByteArray m (fromIntegral addr)
-      I64Type -> Values.I64 <$> readUnalignedByteArray m (fromIntegral addr)
-      F32Type -> Values.F32 <$> readUnalignedByteArray m (fromIntegral addr)
-      F64Type -> Values.F64 <$> readUnalignedByteArray m (fromIntegral addr)
+      I32Type -> Values.I32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      I64Type -> Values.I64 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      F32Type -> Values.F32 <$> UABA.readUnalignedByteArray m (fromIntegral addr)
+      F64Type -> Values.F64 <$> UABA.readUnalignedByteArray m (fromIntegral addr)
 
 storeValue :: (PrimMonad m)
            => MemoryInst m -> Address -> Offset -> Value
@@ -190,10 +191,10 @@ storeValue mem a o v = do
   lift $ do
     m <- readMutVar (mem^.miContent)
     case v of
-      Values.I32 y -> writeUnalignedByteArray m (fromIntegral addr) y
-      Values.I64 y -> writeUnalignedByteArray m (fromIntegral addr) y
-      Values.F32 y -> writeUnalignedByteArray m (fromIntegral addr) y
-      Values.F64 y -> writeUnalignedByteArray m (fromIntegral addr) y
+      Values.I32 y -> LEBA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.I64 y -> LEBA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F32 y -> UABA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F64 y -> UABA.writeUnalignedByteArray m (fromIntegral addr) y
 
 -- Packed access
 
@@ -215,19 +216,19 @@ loadPacked sz ext mem a o t = do
     m <- lift $ readMutVar (mem^.miContent)
     case t of
       I32Type -> lift $ Values.I32 <$> case (ext, sz) of
-        (ZX, Pack8)  -> fromIntegral @Word8  <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack8)  -> fromIntegral @Int8   <$> readUnalignedByteArray m (fromIntegral addr)
-        (ZX, Pack16) -> fromIntegral @Word16 <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack16) -> fromIntegral @Int16  <$> readUnalignedByteArray m (fromIntegral addr)
-        (ZX, Pack32) -> fromIntegral @Word32 <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack32) -> fromIntegral @Int32  <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
       I64Type -> lift $ Values.I64 <$> case (ext, sz) of
-        (ZX, Pack8)  -> fromIntegral @Word8  <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack8)  -> fromIntegral @Int8   <$> readUnalignedByteArray m (fromIntegral addr)
-        (ZX, Pack16) -> fromIntegral @Word16 <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack16) -> fromIntegral @Int16  <$> readUnalignedByteArray m (fromIntegral addr)
-        (ZX, Pack32) -> fromIntegral @Word32 <$> readUnalignedByteArray m (fromIntegral addr)
-        (SX, Pack32) -> fromIntegral @Int32  <$> readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
       _ -> throwError MemoryTypeError
 
 storePacked :: PrimMonad m
@@ -243,13 +244,13 @@ storePacked sz mem a o v = do
     m <- lift $ readMutVar (mem^.miContent)
     case v of
       Values.I32 y -> lift $ case sz of
-        Pack8  -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
-        Pack16 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
-        Pack32 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+        Pack8  -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
       Values.I64 y -> lift $ case sz of
-        Pack8  -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
-        Pack16 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
-        Pack32 -> writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+        Pack8  -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
       _ -> throwError MemoryTypeError
 
 -- Conversions used in "Wasm.Exec.EvalNumeric"
