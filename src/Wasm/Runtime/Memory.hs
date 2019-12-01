@@ -40,8 +40,8 @@ import qualified Data.Primitive.ByteArray.LittleEndian as LEBA
 import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString as BS
+import           Data.ByteString.Lazy (ByteString)
+import qualified Data.ByteString.Lazy as BS
 import           Data.ByteString.Short.Internal (ShortByteString(..), toShort, fromShort)
 
 import           Wasm.Syntax.Memory
@@ -142,7 +142,7 @@ loadBytes mem a n = do
     m' <- newByteArray (fromIntegral n)
     copyMutableByteArray m' 0 m (fromIntegral a) (fromIntegral n)
     ByteArray ba <- unsafeFreezeByteArray m'
-    return $ fromShort (SBS ba)
+    return $ BS.fromStrict $ fromShort (SBS ba)
 
 storeBytes :: PrimMonad m
            => MemoryInst m -> Address -> ByteString
@@ -153,8 +153,8 @@ storeBytes mem a bs = do
        throwError MemoryBoundsError
   lift $ do
     m <- readMutVar (mem^.miContent)
-    let !(SBS ba) = toShort bs
-    copyByteArray m (fromIntegral a) (ByteArray ba) 0 (BS.length bs)
+    let !(SBS ba) = toShort $ BS.toStrict bs
+    copyByteArray m (fromIntegral a) (ByteArray ba) 0 (fromIntegral (BS.length bs))
 
 -- Value access
 
@@ -264,14 +264,14 @@ exportMemory mem = do
     m' <- newByteArray s
     copyMutableByteArray m' 0 m 0 s
     ByteArray ba <- unsafeFreezeByteArray m'
-    return $ fromShort (SBS ba)
+    return $ BS.fromStrict $ fromShort (SBS ba)
 
 importMemory :: PrimMonad m => MemoryInst m -> ByteString -> m ()
 importMemory mem bs = do
     m <- readMutVar (mem^.miContent)
-    m' <- resizeMutableByteArray m (BS.length bs)
-    let !(SBS ba) = toShort bs
-    copyByteArray m' 0 (ByteArray ba) 0 (BS.length bs)
+    m' <- resizeMutableByteArray m (fromIntegral (BS.length bs))
+    let !(SBS ba) = toShort (BS.toStrict bs)
+    copyByteArray m' 0 (ByteArray ba) 0 (fromIntegral (BS.length bs))
     writeMutVar (mem^.miContent) m'
 
 -- Conversions used in "Wasm.Exec.EvalNumeric"
