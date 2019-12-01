@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 module Wasm.Runtime.Memory
-  ( MemoryInst(..)
+  ( MemoryInst
   , doubleFromBits, doubleToBits
   , floatFromBits, floatToBits
   , typeOf
@@ -20,6 +20,8 @@ module Wasm.Runtime.Memory
   , storePacked
   , loadPacked
   , loadValue
+  , exportMemory
+  , importMemory
   ) where
 
 import           Control.Exception
@@ -233,6 +235,23 @@ storePacked sz mem a o v = do
         Pack32 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
       _ -> throwError MemoryTypeError
 
+-- Persistence/Restore
+
+exportMemory :: PrimMonad m => MemoryInst m -> m ByteArray
+exportMemory mem = do
+    m <- readMutVar (mem^.miContent)
+    s <- getSizeofMutableByteArray m
+    m' <- newByteArray s
+    copyMutableByteArray m' 0 m 0 s
+    unsafeFreezeByteArray m'
+
+importMemory :: PrimMonad m => MemoryInst m -> ByteArray -> m ()
+importMemory mem bs = do
+    m <- readMutVar (mem^.miContent)
+    m' <- resizeMutableByteArray m (sizeofByteArray bs)
+    copyByteArray m' 0 bs 0 (sizeofByteArray bs)
+    writeMutVar (mem^.miContent) m'
+
 -- Conversions used in "Wasm.Exec.EvalNumeric"
 
 cast :: (MArray (STUArray s) a (ST s), MArray (STUArray s) b (ST s))
@@ -251,4 +270,3 @@ doubleToBits x = runST (cast x)
 
 doubleFromBits :: Int64 -> Double
 doubleFromBits x = runST (cast x)
-
