@@ -45,7 +45,6 @@ import           Data.Functor.Classes
 import           Data.Int
 import           Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
-import           Data.Primitive.ByteArray (byteArrayFromListN)
 import           Data.Primitive.MutVar
 import           Data.List hiding (lookup, elem)
 import           Data.Map (Map)
@@ -812,11 +811,7 @@ initMemory mods inst s@(value -> seg) = do
   when (fromIntegral bound < end_ || end_ < fromIntegral offset) $
     throwError $ EvalLinkError (region s) "data segment does not fit memory"
   liftMem (region s) $
-    Memory.storeBytes mem (fromIntegral offset) $
-        -- No good way of converting ByteString to ByteArray known
-        byteArrayFromListN
-            (fromIntegral (B.length (seg^.segmentInit)))
-            (B.unpack (seg^.segmentInit))
+    Memory.storeBytes mem (fromIntegral offset) (B.toStrict (seg^.segmentInit))
 
 addImport :: (Regioned f, PrimMonad m)
           => ModuleInst f m

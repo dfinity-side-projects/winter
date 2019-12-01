@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Wasm.Runtime.Memory
   ( MemoryInst
@@ -18,6 +19,7 @@ module Wasm.Runtime.Memory
   , storeBytes
   , storeValue
   , storePacked
+  , loadBytes
   , loadPacked
   , loadValue
   , exportMemory
@@ -38,6 +40,9 @@ import qualified Data.Primitive.ByteArray.LittleEndian as LEBA
 import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
+import           Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
+import           Data.ByteString.Short.Internal (ShortByteString(..), toShort, fromShort)
 
 import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Types
@@ -125,16 +130,31 @@ grow mem delta = do
 
 -- Bulk access
 
-storeBytes :: PrimMonad m
-           => MemoryInst m -> Address -> ByteArray
-           -> ExceptT MemoryError m ()
-storeBytes mem a bs = do
+loadBytes :: PrimMonad m
+           => MemoryInst m -> Address -> Size
+           -> ExceptT MemoryError m ByteString
+loadBytes mem a n = do
   bnd <- lift $ bound mem
-  when (fromIntegral a + sizeofByteArray bs > fromIntegral bnd) $
+  when (fromIntegral a + n > fromIntegral bnd) $
        throwError MemoryBoundsError
   lift $ do
     m <- readMutVar (mem^.miContent)
-    copyByteArray m (fromIntegral a) bs 0 (sizeofByteArray bs)
+    m' <- newByteArray (fromIntegral n)
+    copyMutableByteArray m' 0 m (fromIntegral a) (fromIntegral n)
+    ByteArray ba <- unsafeFreezeByteArray m'
+    return $ fromShort (SBS ba)
+
+storeBytes :: PrimMonad m
+           => MemoryInst m -> Address -> ByteString
+           -> ExceptT MemoryError m ()
+storeBytes mem a bs = do
+  bnd <- lift $ bound mem
+  when (fromIntegral a + BS.length bs > fromIntegral bnd) $
+       throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    let !(SBS ba) = toShort bs
+    copyByteArray m (fromIntegral a) (ByteArray ba) 0 (BS.length bs)
 
 -- Value access
 
@@ -237,19 +257,21 @@ storePacked sz mem a o v = do
 
 -- Persistence/Restore
 
-exportMemory :: PrimMonad m => MemoryInst m -> m ByteArray
+exportMemory :: PrimMonad m => MemoryInst m -> m ByteString
 exportMemory mem = do
     m <- readMutVar (mem^.miContent)
     s <- getSizeofMutableByteArray m
     m' <- newByteArray s
     copyMutableByteArray m' 0 m 0 s
-    unsafeFreezeByteArray m'
+    ByteArray ba <- unsafeFreezeByteArray m'
+    return $ fromShort (SBS ba)
 
-importMemory :: PrimMonad m => MemoryInst m -> ByteArray -> m ()
+importMemory :: PrimMonad m => MemoryInst m -> ByteString -> m ()
 importMemory mem bs = do
     m <- readMutVar (mem^.miContent)
-    m' <- resizeMutableByteArray m (sizeofByteArray bs)
-    copyByteArray m' 0 bs 0 (sizeofByteArray bs)
+    m' <- resizeMutableByteArray m (BS.length bs)
+    let !(SBS ba) = toShort bs
+    copyByteArray m' 0 (ByteArray ba) 0 (BS.length bs)
     writeMutVar (mem^.miContent) m'
 
 -- Conversions used in "Wasm.Exec.EvalNumeric"
