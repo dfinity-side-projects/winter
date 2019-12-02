@@ -29,6 +29,8 @@ import Wasm.Syntax.Values
 
 data NumericError
   = NumericTypeError Int Value ValueType
+  | NumericIntegerDivideByZero
+  | NumericIntegerOverflow
   deriving (Show, Eq)
 
 class Numeric t where
@@ -87,13 +89,16 @@ unaryOp :: Numeric t
 unaryOp f op x = toValue . f op <$> fromValue 1 x
 
 binaryOp :: Numeric t
-         => (OpType t Binary -> t -> t -> t)
+         => (OpType t Binary -> t -> t -> Either NumericError t)
          -> OpType t Binary
          -> Value
          -> Value
          -> Either NumericError Value
-binaryOp f op x y =
-  (toValue .) . f op <$> fromValue 1 x <*> fromValue 2 y
+binaryOp f op x y = do
+  x' <- fromValue 1 x
+  y' <- fromValue 2 y
+  r <- f op x' y'
+  return $ toValue r
 
 testOp :: Numeric t
        => (OpType t Test -> t -> Bool) -> OpType t Test -> Value
@@ -114,6 +119,20 @@ convertOp :: (OpType t Convert -> Value -> Either NumericError Value)
           -> Value
           -> Either NumericError Value
 convertOp = id
+
+checkDiv0 :: Integral t
+          => (t -> t -> t)
+          -> (t -> t -> Either NumericError t)
+checkDiv0 _ _ 0 = Left NumericIntegerDivideByZero
+checkDiv0 op x y = Right $ op x y
+
+checkDiv0Minus1 :: (Integral t, Bounded t)
+          => (t -> t -> t)
+          -> (t -> t -> Either NumericError t)
+checkDiv0Minus1 _ _ 0 = Left NumericIntegerDivideByZero
+checkDiv0Minus1 _ x y | x == minBound && y == -1 = Left NumericIntegerOverflow
+checkDiv0Minus1 op x y = Right $ op x y
+
 
 class Numeric t => IntType t where
   clz :: t -> t
@@ -146,21 +165,21 @@ class Numeric t => IntType t where
   default imul :: Num t => t -> t -> t
   imul = (*)
 
-  idiv_s :: t -> t -> t
-  default idiv_s :: Integral t => t -> t -> t
-  idiv_s = quot
+  idiv_s :: t -> t -> Either NumericError t
+  default idiv_s :: (Integral t, Bounded t) => t -> t -> Either NumericError t
+  idiv_s = checkDiv0Minus1 quot
 
-  idiv_u :: t -> t -> t
-  default idiv_u :: Integral t => t -> t -> t
-  idiv_u = quot
+  idiv_u :: t -> t -> Either NumericError t
+  default idiv_u :: Integral t => t -> t -> Either NumericError t
+  idiv_u = checkDiv0 quot
 
-  irem_s :: t -> t -> t
-  default irem_s :: Integral t => t -> t -> t
-  irem_s = rem
+  irem_s :: t -> t -> Either NumericError t
+  default irem_s :: Integral t => t -> t -> Either NumericError t
+  irem_s = checkDiv0 rem
 
-  irem_u :: t -> t -> t
-  default irem_u :: Integral t => t -> t -> t
-  irem_u = rem
+  irem_u :: t -> t -> Either NumericError t
+  default irem_u :: Integral t => t -> t -> Either NumericError t
+  irem_u = checkDiv0 rem
 
   iand_ :: t -> t -> t
   default iand_ :: Bits t => t -> t -> t
@@ -194,23 +213,23 @@ class Numeric t => IntType t where
   default irotr  :: (Integral t, Bits t) => t -> t -> t
   irotr  = \x y -> rotateR x (fromIntegral y)
 
-  intBinOp :: IntOp n Binary -> t -> t -> t
+  intBinOp :: IntOp n Binary -> t -> t -> Either NumericError t
   intBinOp op x y = case op of
-    I.Add -> iadd x y
-    I.Sub -> isub x y
-    I.Mul -> imul x y
+    I.Add -> Right $ iadd x y
+    I.Sub -> Right $ isub x y
+    I.Mul -> Right $ imul x y
     DivS  -> idiv_s x y
     DivU  -> idiv_u x y
     RemS  -> irem_s x y
     RemU  -> irem_u x y
-    And   -> iand_ x y
-    Or    -> ior_ x y
-    Xor   -> ixor x y
-    Shl   -> ishl x y
-    ShrS  -> ishr_s x y
-    ShrU  -> ishr_u x y
-    Rotl  -> irotl x y
-    Rotr  -> irotr x y
+    And   -> Right $ iand_ x y
+    Or    -> Right $ ior_ x y
+    Xor   -> Right $ ixor x y
+    Shl   -> Right $ ishl x y
+    ShrS  -> Right $ ishr_s x y
+    ShrU  -> Right $ ishr_u x y
+    Rotl  -> Right $ irotl x y
+    Rotr  -> Right $ irotr x y
 
   eqz :: t -> Bool
   default eqz :: (Eq t, Num t) => t -> Bool
@@ -342,15 +361,15 @@ class Numeric t => FloatType t where
   default fcopysign :: (Ord t, Num t) => t -> t -> t
   fcopysign = \x y -> if x < 0 then - (abs y) else abs y
 
-  floatBinOp :: FloatOp n Binary -> t -> t -> t
+  floatBinOp :: FloatOp n Binary -> t -> t -> Either NumericError t
   floatBinOp op x y = case op of
-    F.Add    -> fadd x y
-    F.Sub    -> fsub x y
-    F.Mul    -> fmul x y
-    Div      -> fdiv x y
-    Min      -> fmin x y
-    Max      -> fmax x y
-    CopySign -> fcopysign x y
+    F.Add    -> Right $ fadd x y
+    F.Sub    -> Right $ fsub x y
+    F.Mul    -> Right $ fmul x y
+    Div      -> Right $ fdiv x y
+    Min      -> Right $ fmin x y
+    Max      -> Right $ fmax x y
+    CopySign -> Right $ fcopysign x y
 
   feq :: t -> t -> Bool
   default feq :: Eq t => t -> t -> Bool
@@ -473,8 +492,8 @@ instance IntType Int32 where
     TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
 
-  idiv_u x = fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
-  irem_u x = fromIntegral . rem    (fromIntegral x :: Word32) . fromIntegral
+  idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
+  irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word32) . fromIntegral
   ishr_u x = fromIntegral . shiftR (fromIntegral x :: Word32) . fromIntegral
 
   ilt_u x y = (fromIntegral x :: Word32) < (fromIntegral y :: Word32)
@@ -493,8 +512,8 @@ instance IntType Word32 where
     TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
 
-  idiv_s x = fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
-  irem_s x = fromIntegral . rem    (fromIntegral x :: Int32) . fromIntegral
+  idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
+  irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int32) . fromIntegral
   ishr_s x = fromIntegral . shiftR (fromIntegral x :: Int32) . fromIntegral
 
   ilt_s x y = (fromIntegral x :: Int32) < (fromIntegral y :: Int32)
@@ -513,8 +532,8 @@ instance IntType Int64 where
     TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
 
-  idiv_u x = fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
-  irem_u x = fromIntegral . rem    (fromIntegral x :: Word64) . fromIntegral
+  idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
+  irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word64) . fromIntegral
   ishr_u x = fromIntegral . shiftR (fromIntegral x :: Word64) . fromIntegral
 
   ilt_u x y = (fromIntegral x :: Word64) < (fromIntegral y :: Word64)
@@ -533,8 +552,8 @@ instance IntType Word64 where
     TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
 
-  idiv_s x = fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral
-  irem_s x = fromIntegral . rem    (fromIntegral x :: Int64) . fromIntegral
+  idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral
+  irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int64) . fromIntegral
   ishr_s x = fromIntegral . shiftR (fromIntegral x :: Int64) . fromIntegral
 
   ilt_s x y = (fromIntegral x :: Int64) < (fromIntegral y :: Int64)

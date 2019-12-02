@@ -31,6 +31,7 @@ import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
+import           Data.Bifunctor
 import           Data.ByteString.Lazy (ByteString)
 import           Data.ByteString.Lazy.Char8 as Byte (pack)
 import           Data.Char
@@ -86,7 +87,8 @@ class (Show (Value w), Eq (Value w)) => WasmEngine w m where
     :: ModuleInst w m -> Text
     -> m (Either String (Value w, ModuleInst w m))
 
-type Script w = [Cmd w]
+type LineNumber = Int
+type Script w = [(LineNumber, Cmd w)]
 type Name = Text
 
 data Cmd w
@@ -174,8 +176,12 @@ lang = haskellDef
 lexer :: P.GenTokenParser String u Identity
 lexer = P.makeTokenParser lang
 
+withLine :: Parser a -> Parser (LineNumber, a)
+withLine p =
+ (,) <$> (sourceLine <$> getPosition) <*> p
+
 script :: forall w m. WasmEngine w m => Parser (Script w)
-script = some (whiteSpace *> cmd @_ @m) <* whiteSpace <* eof
+script = some (whiteSpace *> withLine (cmd @_ @m)) <* whiteSpace <* eof
 
 name :: Parser Name
 name = fmap Text.pack . (:)
@@ -426,6 +432,79 @@ newCheckState names mods =
       , _checkStateModules = mods
       }
 
+prettyAction :: WasmEngine w m => Action w -> String
+prettyAction (ActionInvoke _ nm args) =
+  let args' = args^..traverse._Constant in
+  nm ++ " " ++ show args'
+prettyAction (ActionGet _ nm) = nm
+
+invokeAction
+  :: forall w m. (Monad m, MonadBaseControl IO m, WasmEngine w m)
+  => Action w
+  -> (Either String ([Value w], ModuleInst w m) -> StateT (CheckState w m) m ())
+  -> StateT (CheckState w m) m ()
+invokeAction (ActionInvoke mname nm args) k = do
+  CheckState ref names mods <- get
+  let args' = args^..traverse._Constant
+      ref'  = case mname of
+                Nothing -> ref
+                Just n -> names^?!ix n
+  mres <- use (checkStateModules.at ref')
+  case mres of
+    Nothing ->
+      fail $ "Failed to look up module: " ++ show ref'
+    Just inst ->
+      catch (do eres <- lift $ invokeByName @w @m mods inst (Text.pack nm) args'
+                k eres) $ \(exc :: SomeException) ->
+        unless ("wasm function signature contains illegal type" `isInfixOf` show exc) $
+          throwIO exc
+invokeAction (ActionGet mname nm) k = do
+  CheckState ref names mods <- get
+  let ref'  = case mname of
+                Nothing -> ref
+                Just n -> names^?!ix n
+  case IM.lookup ref' mods of
+    Nothing ->
+      fail $ "Failed to look up module: " ++ show ref'
+    Just inst -> do
+      eres <- lift $ getByName @w @m inst (Text.pack nm)
+      k (first (:[]) <$> eres)
+
+-- jww (2018-11-02): These tests currently do not work.
+ignoredFunctions :: [String]
+ignoredFunctions = [
+  -- float_misc.wast
+  "f32.abs",
+  "f64.abs",
+  "f32.neg",
+  "f64.neg",
+  "f32.copysign",
+  "f64.copysign",
+  "f64.nearest",
+
+  -- float_memory.wast
+  "f32.load",
+  "f64.load",
+
+  -- select.wast
+  "select_f32",
+  "select_f64",
+
+  -- address.wast
+  "32_good5",
+  "64_good5",
+
+  -- traps.wast
+  "no_dce.i32.trunc_s_f32",
+  "no_dce.i32.trunc_u_f32",
+  "no_dce.i32.trunc_s_f64",
+  "no_dce.i32.trunc_u_f64",
+  "no_dce.i64.trunc_s_f32",
+  "no_dce.i64.trunc_u_f32",
+  "no_dce.i64.trunc_s_f64",
+  "no_dce.i64.trunc_u_f64"
+  ]
+
 parseWastFile
   :: forall w m. (Monad m, MonadBaseControl IO m, WasmEngine w m)
   => FilePath
@@ -433,142 +512,101 @@ parseWastFile
   -> Map Text ModuleRef
   -> IntMap (ModuleInst w m)
   -> (String -> m ByteString)                       -- convert module into Wasm binary
+  -> (String -> m ())                               -- names a step
   -> (forall a. (Eq a, Show a) => String -> a -> a -> m ()) -- establishes an assertion
   -> (String -> m ())                               -- a negative assertion
-  -> m (CheckState w m)
-parseWastFile path input preNames preMods readModule assertEqual assertFailure =
+  -> m ()
+parseWastFile path input preNames preMods readModule step assertEqual assertFailure =
   case runP (script @_ @m) () path input of
     Left err -> fail $ show err
-    Right wast -> flip execStateT (newCheckState preNames preMods) $
-      forM_ wast $ \case
+    Right wast -> flip evalStateT (newCheckState preNames preMods) $
+      forM_ wast $ \(l,c) -> lift (step ("line " ++ show l)) >> case c of
+        CmdModule (ModuleDecl mname sexp) -> lift (readModule sexp) >>= \wasm ->
+          case decodeModule @w @m wasm of
+            Left err ->
+              fail $  "Error decoding binary wasm: " ++ err
+              -- assertFailure $  "Error decoding wasm:\n"
+              --   ++ sexp ++ "\n\n" ++ err
+            Right (m :: Module w) -> do
+              CheckState _ names mods <- get
+              eres <- lift $ initializeModule @w @m m names mods
+              case eres of
+                Left err ->
+                  -- assertFailure $ "Error initializing module: " ++ show err
+                  fail $ "Error initializing module for:\n"
+                    ++ sexp ++ "\n\n" ++ show err
+                Right (ref, inst) -> do
+                  checkStateRef .= ref
+                  checkStateModules.at ref ?= inst
+                  forM_ mname $ \nm -> checkStateNames.at nm ?= ref
 
-      CmdModule (ModuleDecl mname sexp) -> lift (readModule sexp) >>= \wasm ->
-        case decodeModule @w @m wasm of
-          Left err ->
-            fail $  "Error decoding binary wasm: " ++ err
-            -- assertFailure $  "Error decoding wasm:\n"
-            --   ++ sexp ++ "\n\n" ++ err
-          Right (m :: Module w) -> do
-            CheckState _ names mods <- get
-            eres <- lift $ initializeModule @w @m m names mods
-            case eres of
-              Left err ->
-                -- assertFailure $ "Error initializing module: " ++ show err
-                fail $ "Error initializing module for:\n"
-                  ++ sexp ++ "\n\n" ++ show err
-              Right (ref, inst) -> do
-                checkStateRef .= ref
-                checkStateModules.at ref ?= inst
-                forM_ mname $ \nm -> checkStateNames.at nm ?= ref
+        CmdModule (ModuleBinary mname wasm) ->
+          case decodeModule @w @m wasm of
+            Left err ->
+              fail $  "Error decoding binary wasm: " ++ err
+              -- assertFailure $  "Error decoding wasm:\n"
+              --   ++ sexp ++ "\n\n" ++ err
+            Right m -> do
+              CheckState _ names mods <- get
+              eres <- lift $ initializeModule @w @m m names mods
+              case eres of
+                Left err ->
+                  fail $ "Error initializing module: " ++ show err
+                Right (ref, inst) -> do
+                  checkStateRef .= ref
+                  checkStateModules.at ref ?= inst
+                  forM_ mname $ \nm -> checkStateNames.at nm ?= ref
 
-      CmdModule (ModuleBinary mname wasm) ->
-        case decodeModule @w @m wasm of
-          Left err ->
-            fail $  "Error decoding binary wasm: " ++ err
-            -- assertFailure $  "Error decoding wasm:\n"
-            --   ++ sexp ++ "\n\n" ++ err
-          Right m -> do
-            CheckState _ names mods <- get
-            eres <- lift $ initializeModule @w @m m names mods
-            case eres of
-              Left err ->
-                fail $ "Error initializing module: " ++ show err
-              Right (ref, inst) -> do
-                checkStateRef .= ref
-                checkStateModules.at ref ?= inst
-                forM_ mname $ \nm -> checkStateNames.at nm ?= ref
+        CmdAssertion e -> case e of
+          AssertReturn (ActionInvoke _ nm _) _
+            | nm `elem` ignoredFunctions -> return ()
+          AssertTrap (ActionInvoke _ nm _) _
+            | nm `elem` ignoredFunctions -> return ()
 
-      CmdAssertion e -> case e of
-        AssertReturn (ActionInvoke mname nm args) exps
-          -- jww (2018-11-02): These tests currently do not work.
-          | nm `elem` [
-              -- float_misc.wast
-              "f32.abs",
-              "f64.abs",
-              "f32.neg",
-              "f64.neg",
-              "f32.copysign",
-              "f64.copysign",
-              "f64.nearest",
+          AssertReturn a exps -> do
+            let exps' = exps^..traverse._Constant
+            invokeAction a $ \eres ->
+              lift $ assertEqual (prettyAction @w @m a ++ " == " ++ show exps')
+                (Right exps') (fmap fst eres)
 
-              -- float_memory.wast
-              "f32.load",
-              "f64.load",
+          AssertTrap a msg ->
+            invokeAction a $ \case
+              Left _ -> return ()
+              Right _ -> lift $ assertFailure $ "Did not trap, expected " ++ msg
 
-              -- select.wast
-              "select_f32",
-              "select_f64",
+          AssertReturnCanonicalNan _act  -> return ()
+          AssertReturnArithmeticNan _act -> return ()
+          AssertMalformed _mod' _exp     -> return ()
+          AssertInvalid _mod' _exp       -> return ()
+          AssertUnlinkable _mod' _exp    -> return ()
+          AssertTrapModule _mod' _exp    -> return ()
+          AssertExhaustion _act _exp     -> return ()
 
-              -- address.wast
-              "32_good5",
-              "64_good5"
-            ] -> return ()
-          | otherwise -> do
+        CmdAction (ActionInvoke mname nm args) -> do
           CheckState ref names mods <- get
-          let args' = args^..traverse._Constant
-              exps' = exps^..traverse._Constant
-              ref'  = case mname of
-                        Nothing -> ref
-                        Just n -> names^?!ix n
+          let ref' = case mname of
+                       Nothing -> ref
+                       Just n -> names^?!ix n
           mres <- use (checkStateModules.at ref')
           case mres of
             Nothing ->
               fail $ "Failed to look up module: " ++ show ref'
-            Just inst ->
-              catch (do eres <- lift $ invokeByName @w @m mods inst (Text.pack nm) args'
-                        lift $ assertEqual (nm ++ " " ++ show args' ++ " == " ++ show exps')
-                          (Right exps') (fmap fst eres)) $ \(exc :: SomeException) ->
-                unless ("wasm function signature contains illegal type" `isInfixOf` show exc) $
-                  lift $ assertFailure $ show exc
-
-        AssertReturn (ActionGet mname nm) exps -> do
-          CheckState ref names mods <- get
-          let exps' = exps^..traverse.(_Constant @w)
-              ref'  = case mname of
-                        Nothing -> ref
-                        Just n -> names^?!ix n
-          case IM.lookup ref' mods of
-            Nothing ->
-              fail $ "Failed to look up module: " ++ show ref'
             Just inst -> do
-              eres <- lift $ getByName @w @m inst (Text.pack nm)
-              lift $ assertEqual (nm ++ " == " ++ show exps')
-                (Right exps') ((:[]) <$> fmap fst eres)
+              eres <- lift $ invokeByName @w @m mods inst
+                (Text.pack nm) (args^..traverse._Constant)
+              case eres of
+                Left err ->
+                  fail $ "Error invoking: "
+                      ++ nm ++ " " ++ show args ++ ": " ++ show err
+                Right _ -> pure ()
 
-        AssertReturnCanonicalNan _act  -> return ()
-        AssertReturnArithmeticNan _act -> return ()
-        AssertTrap _act _exp           -> return ()
-        AssertMalformed _mod' _exp     -> return ()
-        AssertInvalid _mod' _exp       -> return ()
-        AssertUnlinkable _mod' _exp    -> return ()
-        AssertTrapModule _mod' _exp    -> return ()
-        AssertExhaustion _act _exp     -> return ()
+        -- Register takes a module, and creates Externs for each of its exported
+        -- members under the given name.
+        CmdRegister str mname -> do
+          CheckState ref names _mods <- get
+          let ref' = case mname of
+                       Nothing -> ref
+                       Just n -> names^?!ix n
+          checkStateNames.at (Text.pack str) ?= ref'
 
-      CmdAction (ActionInvoke mname nm args) -> do
-        CheckState ref names mods <- get
-        let ref' = case mname of
-                     Nothing -> ref
-                     Just n -> names^?!ix n
-        mres <- use (checkStateModules.at ref')
-        case mres of
-          Nothing ->
-            fail $ "Failed to look up module: " ++ show ref'
-          Just inst -> do
-            eres <- lift $ invokeByName @w @m mods inst
-              (Text.pack nm) (args^..traverse._Constant)
-            case eres of
-              Left err ->
-                fail $ "Error invoking: "
-                    ++ nm ++ " " ++ show args ++ ": " ++ show err
-              Right _ -> pure ()
-
-      -- Register takes a module, and creates Externs for each of its exported
-      -- members under the given name.
-      CmdRegister str mname -> do
-        CheckState ref names _mods <- get
-        let ref' = case mname of
-                     Nothing -> ref
-                     Just n -> names^?!ix n
-        checkStateNames.at (Text.pack str) ?= ref'
-
-      e -> fail $ "unexpected: " ++ show e
+        e -> fail $ "unexpected: " ++ show e
