@@ -786,8 +786,7 @@ initMemory mods inst s@(value -> seg) = do
   when (fromIntegral bound < end_ || end_ < fromIntegral offset) $
     throwError $ EvalLinkError (region s) "data segment does not fit memory"
   liftMem (region s) $
-    Memory.storeBytes mem (fromIntegral offset)
-                      (V.fromList (B.unpack (seg^.segmentInit)))
+    Memory.storeBytes mem (fromIntegral offset) (seg^.segmentInit)
 
 addImport :: (Regioned f, PrimMonad m)
           => ModuleInst f m

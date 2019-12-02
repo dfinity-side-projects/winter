@@ -38,7 +38,9 @@ Library
     text,
     transformers,
     vector,
-    primitive
+    primitive,
+    primitive-unaligned,
+    byte-order
   Exposed-Modules:
     Wasm.Binary.Custom
     Wasm.Binary.Decode

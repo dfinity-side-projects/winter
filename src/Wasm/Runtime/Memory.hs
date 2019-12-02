@@ -3,6 +3,8 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Wasm.Runtime.Memory
   ( MemoryInst(..)
@@ -17,9 +19,11 @@ module Wasm.Runtime.Memory
   , storeBytes
   , storeValue
   , storePacked
-  , loadPacked
   , loadBytes
+  , loadPacked
   , loadValue
+  , exportMemory
+  , importMemory
   ) where
 
 import           Control.Exception
@@ -28,16 +32,17 @@ import           Control.Monad.Except
 import           Control.Monad.Primitive
 import           Data.Array.ST (newArray, readArray, MArray, STUArray)
 import           Data.Array.Unsafe (castSTUArray)
-import           Data.Bits
 import           Data.Int
 import           Data.Primitive.MutVar
-import           Data.Vector (Vector)
-import qualified Data.Vector as V
-import           Data.Vector.Unboxed.Mutable (MVector)
-import qualified Data.Vector.Unboxed.Mutable as VM
+import           Data.Primitive.ByteArray
+import qualified Data.Primitive.ByteArray.Unaligned    as UABA
+import qualified Data.Primitive.ByteArray.LittleEndian as LEBA
 import           Data.Word
 import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
+import           Data.ByteString.Lazy (ByteString)
+import qualified Data.ByteString.Lazy as BS
+import           Data.ByteString.Short.Internal (ShortByteString(..), toShort, fromShort)
 
 import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Types
@@ -45,7 +50,7 @@ import           Wasm.Syntax.Values (Value)
 import qualified Wasm.Syntax.Values as Values
 
 data MemoryInst m = MemoryInst
-  { _miContent :: MutVar (PrimState m) (MVector (PrimState m) Word8)
+  { _miContent :: MutVar (PrimState m) (MutableByteArray (PrimState m))
   , _miMax :: Maybe Size
   }
 
@@ -76,27 +81,27 @@ withinLimits n = \case
   Nothing -> True
   Just m -> n <= m
 
-create :: PrimMonad m => Size -> m (Either MemoryError (MVector (PrimState m) Word8))
+create :: PrimMonad m => Size -> ExceptT MemoryError m (MutableByteArray (PrimState m))
 create n
-  | n > 0x10000 = return $ Left MemorySizeOverflow
-  | otherwise   = Right <$> VM.replicate (fromIntegral (n * pageSize)) 0
+  | n > 0x10000 = throwError MemorySizeOverflow
+  | otherwise   = lift $ do
+    m <- newByteArray (fromIntegral $ n * pageSize)
+    fillByteArray m 0 (fromIntegral $ n * pageSize) 0
+    return m
 
 alloc :: PrimMonad m
       => MemoryType -> ExceptT MemoryError m (MemoryInst m)
-alloc (Limits min' mmax) = create min' >>= \case
-  Left err -> throwError err
-  Right m -> do
-    mem <- newMutVar m
-    pure $ assert (withinLimits min' mmax) $
-      MemoryInst
-        { _miContent = mem
-        , _miMax = mmax
-        }
+alloc (Limits min' mmax) = do
+  m <- create min'
+  mem <- newMutVar m
+  pure $ assert (withinLimits min' mmax) $
+    MemoryInst { _miContent = mem , _miMax = mmax }
 
 bound :: PrimMonad m => MemoryInst m -> m Size
 bound mem = do
   m <- readMutVar (mem^.miContent)
-  pure $ fromIntegral $ VM.length m
+  b <- getSizeofMutableByteArray m
+  pure $ fromIntegral b
 
 size :: PrimMonad m => MemoryInst m -> m Size
 size mem = liftM2 div (bound mem) (pure pageSize)
@@ -109,6 +114,8 @@ grow :: PrimMonad m
 grow mem delta = do
   oldSize <- lift $ size mem
   let newSize = oldSize + delta
+  let oldSizeBytes = fromIntegral $ oldSize * pageSize
+  let newSizeBytes = fromIntegral $ newSize * pageSize
   if | oldSize > newSize ->
          throwError MemorySizeOverflow
      | not (withinLimits newSize (mem^.miMax)) ->
@@ -116,49 +123,40 @@ grow mem delta = do
      | newSize > 0x10000 ->
          throwError MemorySizeOverflow
      | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        mv' <- VM.grow mv (fromIntegral (delta * pageSize))
-        forM_ [oldSize * pageSize .. newSize * pageSize - 1] $ \i ->
-          VM.write mv' (fromIntegral i) 0
-        writeMutVar (mem^.miContent) mv'
+        m <- readMutVar (mem^.miContent)
+        m' <- resizeMutableByteArray m newSizeBytes
+        fillByteArray m' oldSizeBytes (newSizeBytes - oldSizeBytes) 0
+        writeMutVar (mem^.miContent) m'
 
-loadByte :: PrimMonad m
-         => MemoryInst m -> Address -> ExceptT MemoryError m Word8
-loadByte mem a = do
-  bnd <- lift $ bound mem
-  if | a >= fromIntegral bnd ->
-       throwError MemoryBoundsError
-     | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        VM.read mv (fromIntegral a)
-
-storeByte :: PrimMonad m
-          => MemoryInst m -> Address -> Word8
-          -> ExceptT MemoryError m ()
-storeByte mem a b = do
-  bnd <- lift $ bound mem
-  if | a >= fromIntegral bnd ->
-       throwError MemoryBoundsError
-     | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        VM.write mv (fromIntegral a) b
+-- Bulk access
 
 loadBytes :: PrimMonad m
-          => MemoryInst m -> Address -> Size
-          -> ExceptT MemoryError m (Vector Word8)
-loadBytes mem a n = V.generateM (fromIntegral n) $ \i ->
-  loadByte mem (a + fromIntegral i)
+           => MemoryInst m -> Address -> Size
+           -> ExceptT MemoryError m ByteString
+loadBytes mem a n = do
+  bnd <- lift $ bound mem
+  when (fromIntegral a + n > fromIntegral bnd) $
+       throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    m' <- newByteArray (fromIntegral n)
+    copyMutableByteArray m' 0 m (fromIntegral a) (fromIntegral n)
+    ByteArray ba <- unsafeFreezeByteArray m'
+    return $ BS.fromStrict $ fromShort (SBS ba)
 
 storeBytes :: PrimMonad m
-           => MemoryInst m -> Address -> Vector Word8
+           => MemoryInst m -> Address -> ByteString
            -> ExceptT MemoryError m ()
 storeBytes mem a bs = do
   bnd <- lift $ bound mem
-  if | fromIntegral a + V.length bs > fromIntegral bnd ->
+  when (fromIntegral a + BS.length bs > fromIntegral bnd) $
        throwError MemoryBoundsError
-     | otherwise -> lift $ do
-        mv <- readMutVar (mem^.miContent)
-        zipWithM_ (VM.write mv) [fromIntegral a..] (V.toList bs)
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    let !(SBS ba) = toShort $ BS.toStrict bs
+    copyByteArray m (fromIntegral a) (ByteArray ba) 0 (fromIntegral (BS.length bs))
+
+-- Value access
 
 effectiveAddress :: Monad m
                  => Address -> Offset -> ExceptT MemoryError m Address
@@ -168,36 +166,115 @@ effectiveAddress a o = do
     then throwError MemoryBoundsError
     else pure ea
 
-loadn :: PrimMonad m
-      => MemoryInst m -> Address -> Offset -> Size
-      -> ExceptT MemoryError m Int64
-loadn mem a o n =
-  assert (n > 0 && n <= 8) $ do
-    addr <- effectiveAddress a o
-    loop addr n
- where
-  loop a' n' =
-     if n' == 0
-     then pure 0
-     else do
-       r <- loop (a' + 1) (n' - 1)
-       let x = shiftL r 8
-       b <- loadByte mem a'
-       pure $ fromIntegral b .|. x
+loadValue :: (PrimMonad m)
+          => MemoryInst m -> Address -> Offset -> ValueType
+          -> ExceptT MemoryError m Value
+loadValue mem a o t = do
+  bnd <- lift $ bound mem
+  addr <- effectiveAddress a o
+  when (addr + fromIntegral (valueTypeSize t) > fromIntegral bnd) $
+    throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    case t of
+      I32Type -> Values.I32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      I64Type -> Values.I64 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      F32Type -> Values.F32 <$> UABA.readUnalignedByteArray m (fromIntegral addr)
+      F64Type -> Values.F64 <$> UABA.readUnalignedByteArray m (fromIntegral addr)
 
-storen :: PrimMonad m
-       => MemoryInst m -> Address -> Offset -> Size -> Int64
-       -> ExceptT MemoryError m ()
-storen mem a o n x =
-  assert (n > 0 && n <= 8) $ do
+storeValue :: (PrimMonad m)
+           => MemoryInst m -> Address -> Offset -> Value
+           -> ExceptT MemoryError m ()
+storeValue mem a o v = do
+  bnd <- lift $ bound mem
+  addr <- effectiveAddress a o
+  when (addr + fromIntegral (valueTypeSize (Values.typeOf v)) > fromIntegral bnd) $
+    throwError MemoryBoundsError
+  lift $ do
+    m <- readMutVar (mem^.miContent)
+    case v of
+      Values.I32 y -> LEBA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.I64 y -> LEBA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F32 y -> UABA.writeUnalignedByteArray m (fromIntegral addr) y
+      Values.F64 y -> UABA.writeUnalignedByteArray m (fromIntegral addr) y
+
+-- Packed access
+
+loadPacked :: PrimMonad m
+           => PackSize
+           -> Extension
+           -> MemoryInst m
+           -> Address
+           -> Offset
+           -> ValueType
+           -> ExceptT MemoryError m Value
+loadPacked sz ext mem a o t = do
+  let n = packedSize sz
+  assert (n <= valueTypeSize t) $ do
+    bnd <- lift $ bound mem
     addr <- effectiveAddress a o
-    loop addr n x
- where
-  loop a' n' x'
-    | n' <= 0 = return ()
-    | otherwise = do
-      loop (a' + 1) (n' - 1) (shiftR x' 8)
-      storeByte mem a' (fromIntegral x' .&. 0xff)
+    when (addr + fromIntegral n > fromIntegral bnd) $
+      throwError MemoryBoundsError
+    m <- lift $ readMutVar (mem^.miContent)
+    case t of
+      I32Type -> lift $ Values.I32 <$> case (ext, sz) of
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      I64Type -> lift $ Values.I64 <$> case (ext, sz) of
+        (ZX, Pack8)  -> fromIntegral @Word8  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack8)  -> fromIntegral @Int8   <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack16) -> fromIntegral @Word16 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack16) -> fromIntegral @Int16  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (ZX, Pack32) -> fromIntegral @Word32 <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+        (SX, Pack32) -> fromIntegral @Int32  <$> LEBA.readUnalignedByteArray m (fromIntegral addr)
+      _ -> throwError MemoryTypeError
+
+storePacked :: PrimMonad m
+            => PackSize -> MemoryInst m -> Address -> Offset -> Value
+            -> ExceptT MemoryError m ()
+storePacked sz mem a o v = do
+  let n = packedSize sz
+  assert (n <= valueTypeSize (Values.typeOf v)) $ do
+    bnd <- lift $ bound mem
+    addr <- effectiveAddress a o
+    when (addr + fromIntegral n > fromIntegral bnd) $
+      throwError MemoryBoundsError
+    m <- lift $ readMutVar (mem^.miContent)
+    case v of
+      Values.I32 y -> lift $ case sz of
+        Pack8  -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+      Values.I64 y -> lift $ case sz of
+        Pack8  -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word8 y)
+        Pack16 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word16 y)
+        Pack32 -> LEBA.writeUnalignedByteArray m (fromIntegral addr) (fromIntegral @_ @Word32 y)
+      _ -> throwError MemoryTypeError
+
+-- Persistence/Restore
+
+exportMemory :: PrimMonad m => MemoryInst m -> m ByteString
+exportMemory mem = do
+    m <- readMutVar (mem^.miContent)
+    s <- getSizeofMutableByteArray m
+    m' <- newByteArray s
+    copyMutableByteArray m' 0 m 0 s
+    ByteArray ba <- unsafeFreezeByteArray m'
+    return $ BS.fromStrict $ fromShort (SBS ba)
+
+importMemory :: PrimMonad m => MemoryInst m -> ByteString -> m ()
+importMemory mem bs = do
+    m <- readMutVar (mem^.miContent)
+    m' <- resizeMutableByteArray m (fromIntegral (BS.length bs))
+    let !(SBS ba) = toShort (BS.toStrict bs)
+    copyByteArray m' 0 (ByteArray ba) 0 (fromIntegral (BS.length bs))
+    writeMutVar (mem^.miContent) m'
+
+-- Conversions used in "Wasm.Exec.EvalNumeric"
 
 cast :: (MArray (STUArray s) a (ST s), MArray (STUArray s) b (ST s))
      => a -> ST s b
@@ -215,60 +292,3 @@ doubleToBits x = runST (cast x)
 
 doubleFromBits :: Int64 -> Double
 doubleFromBits x = runST (cast x)
-
-loadValue :: (PrimMonad m)
-          => MemoryInst m -> Address -> Offset -> ValueType
-          -> ExceptT MemoryError m Value
-loadValue mem a o t =
-  loadn mem a o (valueTypeSize t) >>= \n -> pure $ case t of
-    I32Type -> Values.I32 (fromIntegral n)
-    I64Type -> Values.I64 n
-    F32Type -> Values.F32 (floatFromBits (fromIntegral n))
-    F64Type -> Values.F64 (doubleFromBits n)
-
-storeValue :: (PrimMonad m)
-           => MemoryInst m -> Address -> Offset -> Value
-           -> ExceptT MemoryError m ()
-storeValue mem a o v =
-  let x = case v of
-        Values.I32 y -> fromIntegral y
-        Values.I64 y -> y
-        Values.F32 y -> fromIntegral $ floatToBits y
-        Values.F64 y -> doubleToBits y
-  in storen mem a o (valueTypeSize (Values.typeOf v)) x
-
--- jww (2018-10-31): Is this type signature correct?
-extend :: Address -> Offset -> Extension -> Address
-extend x n = \case
-  ZX -> x
-  SX -> let sh = 64 - 8 * fromIntegral n in shiftR (shiftL x sh) sh
-
-loadPacked :: PrimMonad m
-           => PackSize
-           -> Extension
-           -> MemoryInst m
-           -> Address
-           -> Offset
-           -> ValueType
-           -> ExceptT MemoryError m Value
-loadPacked sz ext mem a o t =
-  assert (packedSize sz <= valueTypeSize t) $ do
-    let n = packedSize sz
-    v <- loadn mem a o n
-    let x = extend v n ext
-    case t of
-      I32Type -> pure $ Values.I32 (fromIntegral x)
-      I64Type -> pure $ Values.I64 x
-      _ -> throwError MemoryTypeError
-
-storePacked :: PrimMonad m
-            => PackSize -> MemoryInst m -> Address -> Offset -> Value
-            -> ExceptT MemoryError m ()
-storePacked sz mem a o v =
-  assert (packedSize sz <= valueTypeSize (Values.typeOf v)) $ do
-    let n = packedSize sz
-    x <- case v of
-          Values.I32 y -> pure $ fromIntegral y
-          Values.I64 y -> pure y
-          _ -> throwError MemoryTypeError
-    storen mem a o n x
