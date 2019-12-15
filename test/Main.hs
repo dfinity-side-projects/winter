@@ -21,17 +21,19 @@ main = do
         [ testDir ++ "/" ++ file
         | ".wast" `isSuffixOf` file
             && "inline-module.wast" /= file
-              -- jww (2018-11-02): We aren't going to bother fully supporting
+              -- We aren't going to bother fully supporting
               -- Unicode function names in the reference interpreter yet.
             && "names.wast" /= file
-              -- jww (2018-11-03): We need more accurate floating-point support.
+              -- We need more accurate floating-point support.
+            && "f32.wast" /= file
+            && "f64.wast" /= file
             && "f32_bitwise.wast" /= file
             && "f64_bitwise.wast" /= file
             && "float_literals.wast" /= file
             && "float_exprs.wast" /= file
             && "conversions.wast" /= file
             && "address.wast" /= file
-              -- jww (2018-11-03): Strange behavior from shl
+              -- Strange behavior from shl
             && "i32.wast" /= file
             && "i64.wast" /= file
         ]
