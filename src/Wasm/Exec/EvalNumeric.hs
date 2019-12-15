@@ -194,24 +194,24 @@ class Numeric t => IntType t where
   ixor = xor
 
   ishl :: t -> t -> t
-  default ishl :: (Integral t, Bits t) => t -> t -> t
-  ishl = \x y -> shiftL x (fromIntegral y)
+  default ishl :: (Integral t, FiniteBits t) => t -> t -> t
+  ishl x y = shiftL x (fromIntegral y `mod` finiteBitSize x)
 
   ishr_u :: t -> t -> t
-  default ishr_u :: (Integral t, Bits t) => t -> t -> t
-  ishr_u = \x y -> shiftR x (fromIntegral y)
+  default ishr_u :: (Integral t, FiniteBits t) => t -> t -> t
+  ishr_u x y = shiftR x (fromIntegral y `mod` finiteBitSize x)
 
   ishr_s :: t -> t -> t
-  default ishr_s :: (Integral t, Bits t) => t -> t -> t
-  ishr_s = \x y -> shiftR x (fromIntegral y)
+  default ishr_s :: (Integral t, FiniteBits t) => t -> t -> t
+  ishr_s x y = shiftR x (fromIntegral y `mod` finiteBitSize x)
 
   irotl  :: t -> t -> t
-  default irotl  :: (Integral t, Bits t) => t -> t -> t
-  irotl  = \x y -> rotateL x (fromIntegral y)
+  default irotl  :: (Integral t, FiniteBits t) => t -> t -> t
+  irotl x y = rotateL x (fromIntegral y `mod` finiteBitSize x)
 
   irotr  :: t -> t -> t
-  default irotr  :: (Integral t, Bits t) => t -> t -> t
-  irotr  = \x y -> rotateR x (fromIntegral y)
+  default irotr  :: (Integral t, FiniteBits t) => t -> t -> t
+  irotr x y = rotateR x (fromIntegral y `mod` finiteBitSize x)
 
   intBinOp :: IntOp n Binary -> t -> t -> Either NumericError t
   intBinOp op x y = case op of
@@ -494,7 +494,8 @@ instance IntType Int32 where
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word32) . fromIntegral
-  ishr_u x = fromIntegral . shiftR (fromIntegral x :: Word32) . fromIntegral
+  ishr_u x y = fromIntegral $
+    shiftR (fromIntegral x :: Word32) (fromIntegral y `mod` finiteBitSize x)
 
   ilt_u x y = (fromIntegral x :: Word32) < (fromIntegral y :: Word32)
   igt_u x y = (fromIntegral x :: Word32) > (fromIntegral y :: Word32)
@@ -514,7 +515,8 @@ instance IntType Word32 where
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int32) . fromIntegral
-  ishr_s x = fromIntegral . shiftR (fromIntegral x :: Int32) . fromIntegral
+  ishr_s x y = fromIntegral $
+    shiftR (fromIntegral x :: Word32) (fromIntegral y `mod` finiteBitSize x)
 
   ilt_s x y = (fromIntegral x :: Int32) < (fromIntegral y :: Int32)
   igt_s x y = (fromIntegral x :: Int32) > (fromIntegral y :: Int32)
@@ -534,7 +536,8 @@ instance IntType Int64 where
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word64) . fromIntegral
-  ishr_u x = fromIntegral . shiftR (fromIntegral x :: Word64) . fromIntegral
+  ishr_u x y = fromIntegral $
+    shiftR (fromIntegral x :: Word64) (fromIntegral y `mod` finiteBitSize x)
 
   ilt_u x y = (fromIntegral x :: Word64) < (fromIntegral y :: Word64)
   igt_u x y = (fromIntegral x :: Word64) > (fromIntegral y :: Word64)
@@ -554,7 +557,8 @@ instance IntType Word64 where
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int64) . fromIntegral
-  ishr_s x = fromIntegral . shiftR (fromIntegral x :: Int64) . fromIntegral
+  ishr_s x y = fromIntegral $
+    shiftR (fromIntegral x :: Word64) (fromIntegral y `mod` finiteBitSize x)
 
   ilt_s x y = (fromIntegral x :: Int64) < (fromIntegral y :: Int64)
   igt_s x y = (fromIntegral x :: Int64) > (fromIntegral y :: Int64)

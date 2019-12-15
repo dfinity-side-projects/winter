@@ -33,9 +33,6 @@ main = do
             && "float_exprs.wast" /= file
             && "conversions.wast" /= file
             && "address.wast" /= file
-              -- Strange behavior from shl
-            && "i32.wast" /= file
-            && "i64.wast" /= file
         ]
 
   defaultMain $ testGroup "main"
