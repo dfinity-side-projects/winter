@@ -30,6 +30,7 @@ import           Control.Applicative
 import           Control.Exception.Lifted hiding (try)
 import           Control.Monad
 import           Control.Monad.Except
+import           Control.Monad.Fail
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
