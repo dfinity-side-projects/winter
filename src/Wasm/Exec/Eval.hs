@@ -222,7 +222,7 @@ newConfig :: IntMap (ModuleInst f m) -> ModuleInst f m -> Config f m
 newConfig mods inst = Config
   { _configModules = mods
   , _configFrame   = Frame inst V.empty
-  , _configBudget  = 300
+  , _configBudget  = 10000
   }
 
 plain :: Regioned f => f (Instr f) -> f (AdminInstr f m)
