@@ -37,7 +37,7 @@ Library
     parsec,
     text,
     transformers,
-    vector,
+    vector (>= 0.12.1),
     primitive,
     primitive-unaligned,
     byte-order

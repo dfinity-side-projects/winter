@@ -6,7 +6,6 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Wasm.Syntax.AST where
 
@@ -769,8 +768,3 @@ exportTypeFor ast = flip (.) _exportDesc $ \case
       .   traverse
       .   traverse
       .   globalType
-
--- Orphan instance, may be removed with new enough vector library
-instance NFData1 V.Vector where
-  liftRnf arnf = V.foldl' (\_ x -> arnf x) ()
-  {-# INLINEABLE liftRnf #-}
