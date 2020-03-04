@@ -112,7 +112,7 @@ type Stack a = [a]
 
 data Frame f m = Frame
   { _frameInst :: !(ModuleInst f m)
-  , _frameLocals :: ![MutVar (PrimState m) Value]
+  , _frameLocals :: !(V.Vector (MutVar (PrimState m) Value))
   }
 
 instance Show (Frame f m) where
@@ -221,7 +221,7 @@ getFrameInst = view (configFrame.frameInst)
 newConfig :: IntMap (ModuleInst f m) -> ModuleInst f m -> Config f m
 newConfig mods inst = Config
   { _configModules = mods
-  , _configFrame   = Frame inst []
+  , _configFrame   = Frame inst V.empty
   , _configBudget  = 300
   }
 
@@ -230,8 +230,9 @@ plain e = Plain (value e) @@ region e
 {-# INLINE plain #-}
 
 lookup :: (Regioned f, Monad m)
-       => String -> s -> Lens' s [a] -> Var f -> EvalT m a
+       => String -> s -> Lens' s (V.Vector a) -> Var f -> EvalT m a
 lookup category inst l x@(value -> x') =
+  {-# SCC "lookup" #-}
   if fromIntegral x' < length (inst^.l)
   then pure $ inst^?!l.ix (fromIntegral x')
   else throwError $
@@ -243,7 +244,7 @@ type_ inst = fmap value . lookup "type" inst (miModule.moduleTypes)
 
 func :: (Regioned f, Monad m)
      => ModuleInst f m -> Var f -> EvalT m (ModuleFunc f m)
-func inst = lookup "function" inst miFuncs
+func inst v = lookup "function" inst miFuncs v
 
 table :: (Regioned f, Monad m)
       => ModuleInst f m -> Var f -> EvalT m (TableInst m (ModuleFunc f m))
@@ -565,7 +566,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
         case func of
           Func.AstFunc _ ref f -> do
             inst' <- getInst ref
-            locals' <- traverse newMutVar $
+            locals' <- traverse newMutVar $ V.fromList $
               args ++ map defaultValue (value f^.funcLocals)
             return $ Code
                 (Framed (length outs) (Code cs cfg vs' es))
@@ -798,10 +799,10 @@ addImport inst ext im = do
   if not (matchExternType typ (importTypeFor (inst^.miModule) (value im)))
     then throwError $ EvalLinkError (region im) "incompatible import type"
     else pure $ case ext of
-      ExternFunc func   -> inst & miFuncs    %~ (func :)
-      ExternTable tab   -> inst & miTables   %~ (tab  :)
-      ExternMemory mem  -> inst & miMemories %~ (mem  :)
-      ExternGlobal glob -> inst & miGlobals  %~ (glob :)
+      ExternFunc func   -> inst & miFuncs    %~ (func `V.cons`)
+      ExternTable tab   -> inst & miTables   %~ (tab  `V.cons`)
+      ExternMemory mem  -> inst & miMemories %~ (mem  `V.cons`)
+      ExternGlobal glob -> inst & miGlobals  %~ (glob `V.cons`)
 
 resolveImports :: (Regioned f, Show1 f, PrimMonad m)
                => Map Text ModuleRef
@@ -809,7 +810,7 @@ resolveImports :: (Regioned f, Show1 f, PrimMonad m)
                -> ModuleInst f m
                -> EvalT m (ModuleInst f m)
 resolveImports names mods inst = flip execStateT inst $
-  forM_ (reverse (inst^.miModule.moduleImports)) $ \im -> do
+  forM_ (V.reverse (inst^.miModule.moduleImports)) $ \im -> do
     let im' = value im
     case M.lookup (im'^.importModule) names of
       Nothing -> throwError $ EvalLinkError (region im) $
@@ -852,7 +853,7 @@ initialize (value -> mod) names mods = do
 
     inst2 <- get
     es <- lift $ traverse (createExport inst2) (mod^.moduleExports)
-    miExports .= mconcat es
+    miExports .= mconcat (V.toList es)
 
     inst3 <- get
     forM_ (mod^.moduleStart) $ \start -> do

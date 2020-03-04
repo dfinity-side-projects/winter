@@ -6,6 +6,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Wasm.Syntax.AST where
 
@@ -17,6 +18,7 @@ import Data.Functor.Classes
 import Data.Functor.Identity
 import Data.List as List
 import Data.Text.Lazy as Text
+import qualified Data.Vector as V
 import GHC.Generics
 import Lens.Micro.Platform as Lens
 
@@ -124,6 +126,9 @@ instance (NFData1 phrase, NFData fix) => NFData (InstrF phrase fix) where
     Unary op -> rnf op
     Binary op -> rnf op
     Convert op -> rnf op
+
+showVecLiftPrec :: (Show a, Show1 f1) => Int -> V.Vector (f1 a) -> ShowS
+showVecLiftPrec p v = showListLiftPrec p (V.toList v)
 
 instance (Show1 phrase, Show fix) => Show (InstrF phrase fix) where
   showsPrec d = showParen (d > 10) . \case
@@ -638,23 +643,23 @@ makeLenses ''Custom
 
 data Module phrase
   = Module
-  { _moduleTypes    :: [Type phrase]
-  , _moduleGlobals  :: [phrase (Global phrase)]
-  , _moduleTables   :: [Table phrase]
-  , _moduleMemories :: [Memory phrase]
-  , _moduleFuncs    :: [phrase (Func phrase)]
+  { _moduleTypes    :: V.Vector (Type phrase)
+  , _moduleGlobals  :: V.Vector (phrase (Global phrase))
+  , _moduleTables   :: V.Vector (Table phrase)
+  , _moduleMemories :: V.Vector (Memory phrase)
+  , _moduleFuncs    :: V.Vector (phrase (Func phrase))
   , _moduleStart    :: Maybe (Var phrase)
-  , _moduleElems    :: [phrase (TableSegment phrase)]
-  , _moduleData     :: [phrase (MemorySegment phrase)]
-  , _moduleImports  :: [phrase (Import phrase)]
-  , _moduleExports  :: [phrase (Export phrase)]
-  , _moduleCustom   :: [Custom]
+  , _moduleElems    :: V.Vector (phrase (TableSegment phrase))
+  , _moduleData     :: V.Vector (phrase (MemorySegment phrase))
+  , _moduleImports  :: V.Vector (phrase (Import phrase))
+  , _moduleExports  :: V.Vector (phrase (Export phrase))
+  , _moduleCustom   :: V.Vector Custom
   } deriving Generic
 
 makeLenses ''Module
 
 instance Default (Module phrase) where
-  def = Module [] [] [] [] [] Nothing [] [] [] [] []
+  def = Module V.empty V.empty V.empty V.empty V.empty Nothing V.empty V.empty V.empty V.empty V.empty
 
 instance NFData1 phrase => NFData (Module phrase) where
   rnf Module {..} =
@@ -675,26 +680,26 @@ instance (Regioned phrase, Show1 phrase) => Show (Module phrase) where
     showParen (d > 10) $
     showString "Module {" .
     showString "\n  _moduleTypes   = " .
-    showListLiftPrec 11 _moduleTypes .
+    showVecLiftPrec 11 _moduleTypes .
     showString "\n  _moduleGlobals  = " .
-    showListLiftPrec 11 _moduleGlobals .
+    showVecLiftPrec 11 _moduleGlobals .
     showString "\n  _moduleTables  = " .
-    showListLiftPrec 11 _moduleTables .
+    showVecLiftPrec 11 _moduleTables .
     showString "\n  _moduleMemories = " .
-    showListLiftPrec 11 _moduleMemories .
+    showVecLiftPrec 11 _moduleMemories .
     showString "\n  _moduleFuncs   = [" .
     List.foldr (\x -> ((showString "\n    " . showLiftPrec 11 x) .)) id _moduleFuncs .
     showString "\n  ]" .
     showString "\n  _moduleStart   = " .
     showLiftLiftPrec 11 _moduleStart .
     showString "\n  _moduleElems   = " .
-    showListLiftLiftListLiftPrec 11 _moduleElems .
+    showListLiftLiftListLiftPrec 11 (V.toList _moduleElems) .
     showString "\n  _moduleData    = " .
-    showListLiftPrec 11 _moduleData .
+    showVecLiftPrec 11 _moduleData .
     showString "\n  _moduleImports  = " .
-    showListLiftPrec 11 _moduleImports .
+    showVecLiftPrec 11 _moduleImports .
     showString "\n  _moduleExports  = " .
-    showListLiftPrec 11 _moduleExports .
+    showVecLiftPrec 11 _moduleExports .
     showString "\n  _moduleCustom  = " .
     showPrec 11 _moduleCustom .
     showString "\n}"
@@ -719,8 +724,8 @@ exportTypeFor ast = flip (.) _exportDesc $ \case
   GlobalExport (need _Var -> var) -> ExternGlobalType $ globals !! var
  where
 
-  imports :: [ExternType]
-  imports = List.map (importTypeFor ast . value) (ast ^. moduleImports)
+  imports :: V.Vector ExternType
+  imports = V.map (importTypeFor ast . value) (ast ^. moduleImports)
 
   funcs :: [FuncType]
   funcs =
@@ -764,3 +769,8 @@ exportTypeFor ast = flip (.) _exportDesc $ \case
       .   traverse
       .   traverse
       .   globalType
+
+-- Orphan instance, may be removed with new enough vector library
+instance NFData1 V.Vector where
+  liftRnf arnf = V.foldl' (\_ x -> arnf x) ()
+  {-# INLINEABLE liftRnf #-}

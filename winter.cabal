@@ -83,6 +83,7 @@ Executable wasm-invoke
     winter,
     mtl,
     parsec,
+    vector,
     text
   HS-Source-Dirs:
     app

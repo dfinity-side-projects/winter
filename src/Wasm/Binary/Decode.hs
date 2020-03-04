@@ -18,6 +18,7 @@ import           Data.Fix
 import           Data.Functor.Identity
 import           Data.Int
 import           Data.List                     as List
+import qualified Data.Vector                   as V
 import           Data.Text.Lazy
 import           Data.Text.Lazy.Encoding
 import           Data.Word
@@ -706,21 +707,21 @@ getModule = do
   void getMagic
   void getVersion
   fmap custom $ flip runStateT [] $ do
-    types     <- getTypes
-    imports   <- getImports
-    funcTypes <- getFuncTypes
-    tables    <- getTables
-    memories  <- getMemories
-    globals   <- getGlobals
-    exports   <- getExports
+    types     <- V.fromList <$> getTypes
+    imports   <- V.fromList <$> getImports
+    funcTypes <- V.fromList <$> getFuncTypes
+    tables    <- V.fromList <$> getTables
+    memories  <- V.fromList <$> getMemories
+    globals   <- V.fromList <$> getGlobals
+    exports   <- V.fromList <$> getExports
     start     <- getStart
-    elems     <- getElems
-    code      <- getCode $ List.length funcTypes
-    datas     <- getDatas
+    elems     <- V.fromList <$> getElems
+    code      <- V.fromList <$> (getCode $ fromIntegral $ V.length funcTypes)
+    datas     <- V.fromList <$> getDatas
     getSection 0x00 () App.empty
     done <- lift isEmpty
     unless done $ fail "getModule: residual input"
-    let funcs = List.zipWith zipper funcTypes code
+    let funcs = V.zipWith zipper funcTypes code
     return $ Module types
                     globals
                     tables
@@ -732,7 +733,7 @@ getModule = do
                     imports
                     exports
  where
-  custom = uncurry $ \f -> f . List.reverse
+  custom = uncurry $ \f -> f . V.reverse . V.fromList
   zipper _funcType = fmap $ \func -> func { _funcType }
 
 {-# SPECIALIZE getModule :: Get (Module Identity) #-}

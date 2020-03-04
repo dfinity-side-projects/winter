@@ -12,6 +12,7 @@ import           Data.Functor.Classes
 import           Data.Functor.Identity
 import           Data.Int
 import           Data.List                     as List
+import qualified Data.Vector                   as V
 import           Data.Maybe
 import           Data.Text.Lazy
 import           Data.Text.Lazy.Encoding
@@ -34,10 +35,13 @@ instance Encodable Identity
 
 instance Encodable Phrase
 
-putList :: (a -> Put) -> [a] -> Put
-putList putValue values = do
-  putULEB128 $ List.length values
+putVector :: (a -> Put) -> V.Vector a -> Put
+putVector putValue values = do
+  putULEB128 $ V.length values
   mapM_ putValue values
+
+putList :: (a -> Put) -> [a] -> Put
+putList putValue = putVector putValue . V.fromList
 
 putByteSlice :: ByteString -> Put
 putByteSlice stream = do
@@ -596,47 +600,47 @@ putSection code writer = do
   putByteStream stream
   where stream = runPut writer
 
-putTypes :: Encodable phrase => [Type phrase] -> Put
-putTypes = putSection 0x01 . putList (liftPut putFuncType)
+putTypes :: Encodable phrase => V.Vector (Type phrase) -> Put
+putTypes = putSection 0x01 . putVector (liftPut putFuncType)
 
-{-# SPECIALIZE putTypes :: [Type Identity] -> Put #-}
-{-# SPECIALIZE putTypes :: [Type Phrase] -> Put #-}
+{-# SPECIALIZE putTypes :: V.Vector (Type Identity) -> Put #-}
+{-# SPECIALIZE putTypes :: V.Vector (Type Phrase) -> Put #-}
 
-putImports :: Encodable phrase => [phrase (Import phrase)] -> Put
-putImports = putSection 0x02 . putList (liftPut putImport)
+putImports :: Encodable phrase => V.Vector (phrase (Import phrase)) -> Put
+putImports = putSection 0x02 . putVector (liftPut putImport)
 
-{-# SPECIALIZE putImports :: [Identity (Import Identity)] -> Put #-}
-{-# SPECIALIZE putImports :: [Phrase (Import Phrase)] -> Put #-}
+{-# SPECIALIZE putImports :: V.Vector (Identity (Import Identity)) -> Put #-}
+{-# SPECIALIZE putImports :: V.Vector (Phrase (Import Phrase)) -> Put #-}
 
-putFuncTypes :: Encodable phrase => [phrase (Func phrase)] -> Put
-putFuncTypes = putSection 0x03 . putList (liftPut (putVar . _funcType))
+putFuncTypes :: Encodable phrase => V.Vector (phrase (Func phrase)) -> Put
+putFuncTypes = putSection 0x03 . putVector (liftPut (putVar . _funcType))
 
-{-# SPECIALIZE putFuncTypes :: [Identity (Func Identity)] -> Put #-}
-{-# SPECIALIZE putFuncTypes :: [Phrase (Func Phrase)] -> Put #-}
+{-# SPECIALIZE putFuncTypes :: V.Vector (Identity (Func Identity)) -> Put #-}
+{-# SPECIALIZE putFuncTypes :: V.Vector (Phrase (Func Phrase)) -> Put #-}
 
-putTables :: Encodable phrase => [Table phrase] -> Put
-putTables = putSection 0x04 . putList (liftPut putTableType)
+putTables :: Encodable phrase => V.Vector (Table phrase) -> Put
+putTables = putSection 0x04 . putVector (liftPut putTableType)
 
-{-# SPECIALIZE putTables :: [Table Identity] -> Put #-}
-{-# SPECIALIZE putTables :: [Table Phrase] -> Put #-}
+{-# SPECIALIZE putTables :: V.Vector (Table Identity) -> Put #-}
+{-# SPECIALIZE putTables :: V.Vector (Table Phrase) -> Put #-}
 
-putMemories :: Encodable phrase => [Memory phrase] -> Put
-putMemories = putSection 0x05 . putList (liftPut putMemoryType)
+putMemories :: Encodable phrase => V.Vector (Memory phrase) -> Put
+putMemories = putSection 0x05 . putVector (liftPut putMemoryType)
 
-{-# SPECIALIZE putMemories :: [Memory Identity] -> Put #-}
-{-# SPECIALIZE putMemories :: [Memory Phrase] -> Put #-}
+{-# SPECIALIZE putMemories :: V.Vector (Memory Identity) -> Put #-}
+{-# SPECIALIZE putMemories :: V.Vector (Memory Phrase) -> Put #-}
 
-putGlobals :: Encodable phrase => [phrase (Global phrase)] -> Put
-putGlobals = putSection 0x06 . putList (liftPut putGlobal)
+putGlobals :: Encodable phrase => V.Vector (phrase (Global phrase)) -> Put
+putGlobals = putSection 0x06 . putVector (liftPut putGlobal)
 
-{-# SPECIALIZE putGlobals :: [Identity (Global Identity)] -> Put #-}
-{-# SPECIALIZE putGlobals :: [Phrase (Global Phrase)] -> Put #-}
+{-# SPECIALIZE putGlobals :: V.Vector (Identity (Global Identity)) -> Put #-}
+{-# SPECIALIZE putGlobals :: V.Vector (Phrase (Global Phrase)) -> Put #-}
 
-putExports :: Encodable phrase => [phrase (Export phrase)] -> Put
-putExports = putSection 0x07 . putList (liftPut putExport)
+putExports :: Encodable phrase => V.Vector (phrase (Export phrase)) -> Put
+putExports = putSection 0x07 . putVector (liftPut putExport)
 
-{-# SPECIALIZE putExports :: [Identity (Export Identity)] -> Put #-}
-{-# SPECIALIZE putExports :: [Phrase (Export Phrase)] -> Put #-}
+{-# SPECIALIZE putExports :: V.Vector (Identity (Export Identity)) -> Put #-}
+{-# SPECIALIZE putExports :: V.Vector (Phrase (Export Phrase)) -> Put #-}
 
 putStart :: Encodable phrase => Maybe (Var phrase) -> Put
 putStart = maybe mempty $ putSection 0x08 . putVar
@@ -644,25 +648,25 @@ putStart = maybe mempty $ putSection 0x08 . putVar
 {-# SPECIALIZE putStart :: Maybe (Var Identity) -> Put #-}
 {-# SPECIALIZE putStart :: Maybe (Var Phrase) -> Put #-}
 
-putElems :: Encodable phrase => [phrase (TableSegment phrase)] -> Put
-putElems = putSection 0x09 . putList (liftPut putTableSegment)
+putElems :: Encodable phrase => V.Vector (phrase (TableSegment phrase)) -> Put
+putElems = putSection 0x09 . putVector (liftPut putTableSegment)
 
-{-# SPECIALIZE putElems :: [Identity (TableSegment Identity)] -> Put #-}
-{-# SPECIALIZE putElems :: [Phrase (TableSegment Phrase)] -> Put #-}
+{-# SPECIALIZE putElems :: V.Vector (Identity (TableSegment Identity)) -> Put #-}
+{-# SPECIALIZE putElems :: V.Vector (Phrase (TableSegment Phrase)) -> Put #-}
 
-putDatas :: Encodable phrase => [phrase (MemorySegment phrase)] -> Put
-putDatas = putSection 0x0B . putList (liftPut putMemorySegment)
+putDatas :: Encodable phrase => V.Vector (phrase (MemorySegment phrase)) -> Put
+putDatas = putSection 0x0B . putVector (liftPut putMemorySegment)
 
-{-# SPECIALIZE putDatas :: [Identity (MemorySegment Identity)] -> Put #-}
-{-# SPECIALIZE putDatas :: [Phrase (MemorySegment Phrase)] -> Put #-}
+{-# SPECIALIZE putDatas :: V.Vector (Identity (MemorySegment Identity)) -> Put #-}
+{-# SPECIALIZE putDatas :: V.Vector (Phrase (MemorySegment Phrase)) -> Put #-}
 
-putCode :: Encodable phrase => [phrase (Func phrase)] -> Put
-putCode = putSection 0x0A . putList (liftPut putFunc)
+putCode :: Encodable phrase => V.Vector (phrase (Func phrase)) -> Put
+putCode = putSection 0x0A . putVector (liftPut putFunc)
 
-{-# SPECIALIZE putCode :: [Identity (Func Identity)] -> Put #-}
-{-# SPECIALIZE putCode :: [Phrase (Func Phrase)] -> Put #-}
+{-# SPECIALIZE putCode :: V.Vector (Identity (Func Identity)) -> Put #-}
+{-# SPECIALIZE putCode :: V.Vector (Phrase (Func Phrase)) -> Put #-}
 
-putCustom :: [Custom] -> Put
+putCustom :: V.Vector (Custom) -> Put
 putCustom = mapM_ $ \Custom {..} -> do
   putSection 0x00 $ do
     putText _customName

@@ -19,6 +19,7 @@ import Text.ParserCombinators.Parsec (Parser)
 import qualified Data.ByteString.Lazy          as Lazy
 import qualified Data.IntMap                   as IntMap
 import qualified Text.ParserCombinators.Parsec as Parsec
+import qualified Data.Vector as V
 
 import Wasm.Binary.Decode    (getModule)
 import Wasm.Exec.Eval        (initialize, invokeByName)
@@ -113,10 +114,10 @@ app :: ModuleInst Identity IO
 app =
   let printI32' = allocHostEff (FuncType [I32Type] []) printI32
   in (emptyModuleInst def)
-    { _miGlobals  = [ ]
-    , _miTables   = [ ]
-    , _miMemories = [ ]
-    , _miFuncs    = [ printI32' ]
+    { _miGlobals  = V.empty
+    , _miTables   = V.empty
+    , _miMemories = V.empty
+    , _miFuncs    = V.singleton printI32'
     , _miExports  = fromList [ ("printI32", ExternFunc printI32') ]
     }
 

@@ -5,6 +5,7 @@ module SpecTest (spectest) where
 import           Control.Monad.Except
 import           Data.Default.Class
 import qualified Data.Map as M
+import qualified Data.Vector as V
 import           Lens.Micro.Platform
 import           Text.Printf
 
@@ -32,20 +33,22 @@ spectest = do
       print5 = pr [F64Type]              -- print_f64
   pure $ emptyModuleInst def
     & miGlobals .~
-      [ global0
-      , global1
-      , global2
-      ]
-    & miTables .~ [ table0 ]
-    & miMemories .~ [ memory0 ]
+      (V.fromList
+        [ global0
+        , global1
+        , global2
+        ])
+    & miTables .~ V.singleton table0
+    & miMemories .~ V.singleton memory0
     & miFuncs .~
+      (V.fromList
       [ print0
       , print1
       , print2
       , print3
       , print4
       , print5
-      ]
+      ])
     & miExports .~ M.fromList
       [ ("print",         ExternFunc print0)
       , ("print_i32",     ExternFunc print1)

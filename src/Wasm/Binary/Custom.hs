@@ -15,11 +15,9 @@ getNameSection :: Module phrase -> Maybe Custom
 getNameSection = getCustomSection "name"
 
 getCustomSection :: Text -> Module phrase -> Maybe Custom
-getCustomSection key ast = case List.filter matches $ _moduleCustom ast of
-  [c] -> Just c
-  _ -> Nothing
+getCustomSection key ast = List.find matches $ _moduleCustom ast
   where
-    matches = ((==) key) . _customName
+    matches = (==) key . _customName
 
 getModuleName :: Module phrase -> Maybe Text
 getModuleName ast = do

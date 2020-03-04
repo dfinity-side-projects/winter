@@ -12,6 +12,7 @@ import           Control.Monad.Primitive
 import           Data.Functor.Classes
 import           Data.Map (Map)
 import qualified Data.Map as M
+import qualified Data.Vector as V
 import           Data.Text.Lazy (Text)
 import           Lens.Micro.Platform
 import           Text.Show
@@ -54,10 +55,10 @@ _ExternGlobal _ x = pure x
 
 data ModuleInst f m = ModuleInst
   { _miModule   :: Module f
-  , _miFuncs    :: [ModuleFunc f m]
-  , _miTables   :: [TableInst m (ModuleFunc f m)]
-  , _miMemories :: [MemoryInst m]
-  , _miGlobals  :: [GlobalInst m]
+  , _miFuncs    :: V.Vector (ModuleFunc f m)
+  , _miTables   :: V.Vector (TableInst m (ModuleFunc f m))
+  , _miMemories :: V.Vector (MemoryInst m)
+  , _miGlobals  :: V.Vector (GlobalInst m)
   , _miExports  :: ExportInst f m
   }
 
@@ -68,7 +69,7 @@ instance (Regioned f, Show1 f) => Show (ModuleInst f m) where
       . showString "\n  _miFuncs    = "
       . foldr (\x -> ((showString "\n    " . showLiftPrec 11 x) .)) id _miFuncs
       . showString "\n  _miTables   = "
-      . showListWith (showsPrec 11) _miTables
+      . showListWith (showsPrec 11) (V.toList _miTables)
       . showString "\n  _miMemories = "
       . showsPrec 11 _miMemories
       . showString "\n  _miGlobals  = "
@@ -84,10 +85,10 @@ makeLenses ''ModuleInst
 emptyModuleInst :: Module f -> ModuleInst f m
 emptyModuleInst m = ModuleInst
   { _miModule   = m
-  , _miFuncs    = []
-  , _miTables   = []
-  , _miMemories = []
-  , _miGlobals  = []
+  , _miFuncs    = mempty
+  , _miTables   = mempty
+  , _miMemories = mempty
+  , _miGlobals  = mempty
   , _miExports  = mempty
   }
 
