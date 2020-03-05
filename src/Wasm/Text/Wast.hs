@@ -30,7 +30,7 @@ import           Control.Applicative
 import           Control.Exception.Lifted hiding (try)
 import           Control.Monad
 import           Control.Monad.Except
-import           Control.Monad.Fail
+import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
@@ -443,7 +443,7 @@ prettyAction (ActionInvoke _ nm args) =
 prettyAction (ActionGet _ nm) = nm
 
 invokeAction
-  :: forall w m. (MonadFail m, MonadBaseControl IO m, WasmEngine w m)
+  :: forall w m. (Control.Monad.Fail.MonadFail m, MonadBaseControl IO m, WasmEngine w m)
   => Action w
   -> (Either String ([Value w], ModuleInst w m) -> StateT (CheckState w m) m ())
   -> StateT (CheckState w m) m ()
