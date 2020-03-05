@@ -30,6 +30,7 @@ import           Control.Applicative
 import           Control.Exception.Lifted hiding (try)
 import           Control.Monad
 import           Control.Monad.Except
+import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
@@ -442,7 +443,7 @@ prettyAction (ActionInvoke _ nm args) =
 prettyAction (ActionGet _ nm) = nm
 
 invokeAction
-  :: forall w m. (Monad m, MonadBaseControl IO m, WasmEngine w m)
+  :: forall w m. (Control.Monad.Fail.MonadFail m, MonadBaseControl IO m, WasmEngine w m)
   => Action w
   -> (Either String ([Value w], ModuleInst w m) -> StateT (CheckState w m) m ())
   -> StateT (CheckState w m) m ()
@@ -474,7 +475,7 @@ invokeAction (ActionGet mname nm) k = do
       k (first (:[]) <$> eres)
 
 invokeModule
-  :: forall w m. (Monad m, MonadBaseControl IO m, WasmEngine w m)
+  :: forall w m. (MonadFail m, WasmEngine w m)
   => (String -> m ByteString)                       -- convert module into Wasm binary
   -> ModuleDecl
   -> (Either String () -> StateT (CheckState w m) m ())
@@ -542,7 +543,7 @@ ignoredFunctions = [
   ]
 
 parseWastFile
-  :: forall w m. (Monad m, MonadIO m, MonadBaseControl IO m, WasmEngine w m)
+  :: forall w m. (MonadFail m, MonadBaseControl IO m, WasmEngine w m)
   => FilePath
   -> String
   -> Map Text ModuleRef

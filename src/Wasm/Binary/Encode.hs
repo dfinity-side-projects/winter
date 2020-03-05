@@ -558,7 +558,7 @@ putInstr = flip (.) unFix $ \case
   Convert (F64ConvertOp Float.PromoteF32) -> putWord8 0xBB
   Convert (F64ConvertOp Float.ReinterpretInt) -> putWord8 0xBF
 
-  op -> fail $ "putInstr: invalid operator: " ++ show op
+  op -> error $ "putInstr: invalid operator: " ++ show op
 
 {-# SPECIALIZE putInstr :: Instr Identity -> Put #-}
 {-# SPECIALIZE putInstr :: Instr Phrase -> Put #-}

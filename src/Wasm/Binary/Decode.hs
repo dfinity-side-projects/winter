@@ -238,7 +238,7 @@ getMemoryOp :: ValueType -> Maybe size -> Get (MemoryOp size)
 getMemoryOp valueType size = do
   alignment <- getULEB128 32
   if alignment > 32
-    then fail "getMemoryOp: invalid alignment: %d" alignment
+    then error "getMemoryOp: invalid alignment: %d" alignment
     else do
       offset <- getULEB128 32
       return $ MemoryOp valueType alignment offset size
