@@ -131,7 +131,7 @@ gives a significant performance boost.
 The correspondence between their and our 'Code' type is the following:
 
     Wasm:   (vs1, Label n les (vs2, es2) :: es1)
-    Winter: Code cfg1 (Label n les les (Code … cfg2 vs1 es1)) vs2 es2
+    Winter: Code (Label n les (Code … cfg2 vs1 es1)) cfg1 vs2 es2
 
 The point is that now es2 (the instruction to execute next) is nicely exposed
 for O(1) analsys, instead of hidden deep in the Code data structure. On
@@ -279,12 +279,26 @@ funcElem :: (Regioned f, PrimMonad m)
 funcElem = elem
 {-# INLINE funcElem #-}
 
+blockType :: (Regioned f, PrimMonad m)
+          => ModuleInst f m -> BlockType f -> EvalT m FuncType
+blockType inst = \case
+  VarBlockType x -> type_ inst x
+  ValBlockType Nothing -> return $ FuncType [] []
+  ValBlockType (Just t) -> return $ FuncType [] [t]
+
 takeFrom :: Monad m
          => Int -> Stack a -> Region -> EvalT m (Stack a)
 takeFrom n vs at' =
   if n > length vs
   then throwError $ EvalCrashError at' "stack underflow"
   else pure $ take n vs
+
+splitFrom :: Monad m
+         => Int -> Stack a -> Region -> EvalT m (Stack a, Stack a)
+splitFrom n vs at' =
+  if n > length vs
+  then throwError $ EvalCrashError at' "stack underflow"
+  else pure $ splitAt n vs
 
 partialZip :: [a] -> [b] -> [Either a (Either b (a, b))]
 partialZip [] [] = []
@@ -334,18 +348,24 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           k vs (Trapping "unreachable executed" @@ at : es)
         (Nop, vs)                      -> {-# SCC step_Nop #-}
           k vs es
-        (Block ts es', vs)             -> {-# SCC step_Block #-}
+        (Block bt es', vs)             -> {-# SCC step_Block #-} do
+          inst <- getFrameInst
+          FuncType ts1 ts2 <- lift $ blockType inst bt
+          (args, vs') <- lift $ splitFrom (length ts1) vs at
           return $ Code
-            (Label (length ts) id (Code cs cfg vs es))
-            cfg [] (map plain es')
-        (Loop _ es', vs)               -> {-# SCC step_Loop #-}
+            (Label (length ts2) id (Code cs cfg vs' es))
+            cfg args (map plain es')
+        (Loop bt es', vs)               -> {-# SCC step_Loop #-} do
+          inst <- getFrameInst
+          FuncType ts1 _ts2 <- lift $ blockType inst bt
+          (args, vs') <- lift $ splitFrom (length ts1) vs at
           return $ Code
-            (Label 0 (e :) (Code cs cfg vs es))
-            cfg [] (map plain es')
-        (If ts _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
-          k vs' (Plain (Fix (Block ts es2)) @@ at : es)
-        (If ts es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
-          k vs' (Plain (Fix (Block ts es1)) @@ at : es)
+            (Label (length ts1) (e :) (Code cs cfg vs' es))
+            cfg args (map plain es')
+        (If bt _ es2, I32 0 : vs')     -> {-# SCC step_If1 #-}
+          k vs' (Plain (Fix (Block bt es2)) @@ at : es)
+        (If bt es1 _, I32 _ : vs')     -> {-# SCC step_If2 #-}
+          k vs' (Plain (Fix (Block bt es1)) @@ at : es)
         (Br x, vs)                     -> {-# SCC step_Br #-}
           k [] (Breaking (value x) vs @@ at : es)
         (BrIf _, I32 0 : vs')          -> {-# SCC step_BrIf1 #-}
@@ -548,13 +568,11 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
         when (budget == 0) $
           throwError $ EvalExhaustionError at "call stack exhausted"
 
-        let FuncType ins outs = Func.typeOf func
-            n = length ins
+        let FuncType ins out = Func.typeOf func
+            n1 = length ins
+            n2 = length out
 
-        (reverse -> args, vs') <-
-          if n > length vs
-          then throwError $ EvalCrashError at "stack underflow"
-          else pure $ splitAt n vs
+        (reverse -> args, vs') <- lift $ splitFrom n1 vs at
 
         -- traceM $ "Invoke: ins  = " ++ show ins
         -- traceM $ "Invoke: args = " ++ show args
@@ -568,17 +586,22 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             inst' <- getInst ref
             locals' <- traverse newMutVar $ V.fromList $
               args ++ map defaultValue (value f^.funcLocals)
+            let cfg' = cfg & configFrame .~ Frame inst' locals' & configBudget %~ pred
+            {-
             return $ Code
-                (Framed (length outs) (Code cs cfg vs' es))
-                (cfg & configFrame .~ Frame inst' locals' & configBudget %~ pred)
+                (Framed n2 (Code cs cfg vs' es))
                 []
-                [Plain (Fix (Block outs (value f^.funcBody))) @@ region f]
+                [Plain (Fix (Block out (value f^.funcBody))) @@ region f]
+            -}
+            return $ Code
+              (Label n2 id (Code (Framed n2 (Code cs cfg vs' es)) cfg' [] []))
+              cfg' [] (map plain (value f^.funcBody))
 
           Func.HostFunc _ f -> do
             -- jww (2018-11-01): Need an exception handler here, so we can
             -- report host errors.
             let res = reverse (f args)
-            lift $ checkTypes at outs res
+            lift $ checkTypes at out res
             k (res ++ vs') es
             -- try (reverse (f args) ++ vs', [])
             -- with Crash (_, msg) -> EvalCrashError at msg)
@@ -590,7 +613,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             case res' of
               Left err -> throwError $ EvalTrapError at err
               Right (reverse -> res) -> do
-                lift $ checkTypes at outs res
+                lift $ checkTypes at out res
                 k (res ++ vs') es
                 -- try (reverse (f args) ++ vs', [])
                 -- with Crash (_, msg) -> EvalCrashError at msg)

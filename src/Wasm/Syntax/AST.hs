@@ -55,14 +55,30 @@ _Type = traverse
 {-# SPECIALIZE _Type :: Traversal' (Type Identity) FuncType #-}
 {-# SPECIALIZE _Type :: Traversal' (Type Phrase) FuncType #-}
 
+data BlockType phrase = VarBlockType (Var phrase) | ValBlockType (Maybe ValueType)
+
+instance (NFData1 phrase) => NFData (BlockType phrase) where
+  rnf = \case
+    VarBlockType var -> rnfLift var
+    ValBlockType vt -> rnf vt
+
+instance (Show1 phrase) => Show (BlockType phrase) where
+  showsPrec d = showParen (d > 10) . \case
+    VarBlockType var ->
+      showString "VarBlockType " .
+      showLiftPrec 11 var
+    ValBlockType vt ->
+      showString "ValBlockType " .
+      showPrec 11 vt
+
 data InstrF (phrase :: * -> *) fix
   = Unreachable
   | Nop
   | Drop
   | Select
-  | Block StackType [phrase fix]
-  | Loop StackType [phrase fix]
-  | If StackType [phrase fix] [phrase fix]
+  | Block (BlockType phrase) [phrase fix]
+  | Loop (BlockType phrase) [phrase fix]
+  | If (BlockType phrase) [phrase fix] [phrase fix]
   | Br (Var phrase)
   | BrIf (Var phrase)
   | BrTable [Var phrase] (Var phrase)

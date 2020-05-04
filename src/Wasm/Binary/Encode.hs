@@ -65,18 +65,13 @@ putElemType :: ElemType -> Put
 putElemType AnyFuncType = putWord8 0x70
 
 putStackType :: StackType -> Put
-putStackType = \case
-  []          -> putWord8 0x40
-  I32Type : _ -> putWord8 0x7F
-  I64Type : _ -> putWord8 0x7E
-  F32Type : _ -> putWord8 0x7D
-  F64Type : _ -> putWord8 0x7C
+putStackType = putList putValueType
 
 putFuncType :: FuncType -> Put
 putFuncType FuncType {..} = do
   putWord8 0x60
-  putList putValueType _funcInput
-  putList putValueType _funcOutput
+  putStackType _funcInput
+  putStackType _funcOutput
 
 putLimits :: Limits Int32 -> Put
 putLimits Limits {..} = do
@@ -108,6 +103,12 @@ putVar = liftPut putULEB128
 
 {-# SPECIALIZE putVar :: Var Identity -> Put #-}
 {-# SPECIALIZE putVar :: Var Phrase -> Put #-}
+
+putBlockType :: Encodable phrase => BlockType phrase -> Put
+putBlockType = \case
+  VarBlockType x -> putVar x
+  ValBlockType Nothing -> putWord8 0x40
+  ValBlockType (Just t) -> putValueType t
 
 putGlobal :: Encodable phrase => Global phrase -> Put
 putGlobal Global {..} = do
@@ -225,17 +226,17 @@ putInstr = flip (.) unFix $ \case
   Nop               -> putWord8 0x01
   Block result expr -> do
     putWord8 0x02
-    putStackType result
+    putBlockType result
     putInstrBlock expr
     putWord8 0x0B
   Loop result expr -> do
     putWord8 0x03
-    putStackType result
+    putBlockType result
     putInstrBlock expr
     putWord8 0x0B
-  If condition consequent alternative -> do
+  If result consequent alternative -> do
     putWord8 0x04
-    putStackType condition
+    putBlockType result
     putInstrBlock consequent
     putAlternative alternative
     putWord8 0x0B

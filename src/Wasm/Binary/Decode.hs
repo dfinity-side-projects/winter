@@ -17,6 +17,7 @@ import           Data.ByteString.Lazy
 import           Data.Fix
 import           Data.Functor.Identity
 import           Data.Int
+import           Data.Bits
 import           Data.List                     as List
 import qualified Data.Vector                   as V
 import           Data.Text.Lazy
@@ -77,7 +78,7 @@ getText :: Int -> Get Text
 getText budget = do
   bytes <- getByteSlice budget
   case decodeUtf8' bytes of
-    Left  _    -> fail "getText: invalid UTF-8 encoding"
+    Left  _    -> fail "getText: malformed UTF-8 encoding"
     Right text -> return text
 
 getValueType :: Get ValueType
@@ -88,30 +89,22 @@ getValueType = do
     0x7E -> return I64Type
     0x7D -> return F32Type
     0x7C -> return F64Type
-    _    -> fail $ printf "getValueType: invalid value type: 0x%02X" byte
+    _    -> fail $ printf "getValueType: malformed value type: 0x%02X" byte
 
 getElemType :: Get ElemType
 getElemType = do
   byte <- getWord8
   case byte of
     0x70 -> return AnyFuncType
-    _    -> fail $ printf "getElemType: invalid element type: 0x%02X" byte
+    _    -> fail $ printf "getElemType: malformed element type: 0x%02X" byte
 
 getStackType :: Get StackType
-getStackType = do
-  byte <- getWord8
-  case byte of
-    0x40 -> return []
-    0x7F -> return [I32Type]
-    0x7E -> return [I64Type]
-    0x7D -> return [F32Type]
-    0x7C -> return [F64Type]
-    _    -> fail $ printf "getStackType: invalid stack type: 0x%02X" byte
+getStackType = getList 32 getValueType
 
 getFuncType :: Get FuncType
 getFuncType = do
   byteGuard 0x60
-  FuncType <$> getList 32 getValueType <*> getList 32 getValueType
+  FuncType <$> getStackType <*> getStackType
 
 getLimits :: Get (Limits Int32)
 getLimits = do
@@ -129,7 +122,7 @@ getMutability = do
   case byte of
     0x00 -> return Immutable
     0x01 -> return Mutable
-    _    -> fail $ printf "getMutability: invalid mutability type: 0x%02X" byte
+    _    -> fail $ printf "getMutability: malformed mutability type: 0x%02X" byte
 
 getTableType :: Get TableType
 getTableType = TableType <$> getElemType <*> getLimits
@@ -164,6 +157,16 @@ getFunc = do
 
 {-# SPECIALIZE getFunc :: Get (Func Identity) #-}
 {-# SPECIALIZE getFunc :: Get (Func Phrase) #-}
+
+getBlockType :: Decodable phrase => Get (BlockType phrase)
+getBlockType = do
+  byte <- lookAhead getWord8
+  case byte of
+    0x40 ->
+         ValBlockType Nothing <$ skip 1
+    _ | byte .&. 0xc0 == 0x40 ->
+         ValBlockType . Just <$> getValueType
+    _ -> VarBlockType <$> getVar
 
 getLocals :: Get [ValueType]
 getLocals = do
@@ -203,7 +206,7 @@ getImportDesc = do
     0x02 -> MemoryImport <$> getMemoryType
     0x03 -> GlobalImport <$> getGlobalType
     _    -> fail
-      $ printf "getImportDesc: invalid import description type: 0x%02X" byte
+      $ printf "getImportDesc: malformed import description type: 0x%02X" byte
 
 {-# SPECIALIZE getImportDesc :: Get (ImportDesc Identity) #-}
 {-# SPECIALIZE getImportDesc :: Get (ImportDesc Phrase) #-}
@@ -252,17 +255,17 @@ getInstr = Fix <$> do
     0x00 -> return Unreachable
     0x01 -> return Nop
     0x02 -> do
-      result <- getStackType
+      result <- getBlockType
       expr   <- getInstrBlock
       byteGuard 0x0B
       return $ Block result expr
     0x03 -> do
-      result <- getStackType
+      result <- getBlockType
       expr   <- getInstrBlock
       byteGuard 0x0B
       return $ Loop result expr
     0x04 -> do
-      condition   <- getStackType
+      condition   <- getBlockType
       consequent  <- getInstrBlock
       alternative <- getAlternative <|> return []
       byteGuard 0x0B
@@ -611,7 +614,7 @@ getSection code def parser = do
           getSection code def parser
         else if
           | byte > 0x0B -> fail
-          $ printf "getSection: invalid section code: 0x%02X" byte
+          $ printf "getSection: malformed section code: 0x%02X" byte
           | byte > code -> return def
           | byte < code -> fail
           $ printf "getSection: unexpected section code: 0x%02X" byte

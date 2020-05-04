@@ -24,10 +24,11 @@ class Monad (WasmM t) => Wasm t where
   -- Control flow operators.
   unreachable :: WasmM t Void
   nop :: WasmM t ()
-  block :: [ValueType] -> WasmM t a -> WasmM t ()
-  loop :: [ValueType] -> WasmM t a -> WasmM t ()
-  if_ :: [ValueType] -> WasmM t a -> WasmM t ()
-  if_else_ :: [ValueType] -> WasmM t a -> WasmM t a -> WasmM t ()
+  -- This only allows pre-multi-value blocks
+  block :: Maybe ValueType -> WasmM t a -> WasmM t ()
+  loop :: Maybe ValueType -> WasmM t a -> WasmM t ()
+  if_ :: Maybe ValueType -> WasmM t a -> WasmM t ()
+  if_else_ :: Maybe ValueType -> WasmM t a -> WasmM t a -> WasmM t ()
   br :: Int -> WasmM t ()
   br_if :: Int -> WasmM t ()
   br_table :: [Int] -> Int -> WasmM t ()
@@ -251,10 +252,10 @@ instance Applicative f => Wasm [Instr f] where
   -- Control flow operators.
   unreachable    = WasmM $ error "unreachable!" <$ tell [Fix Unreachable]
   nop            = WasmM $ tell [Fix Nop]
-  block l b      = WasmM $ tell [Fix $ Block l (map pure (execWriter (runWasmM b)))]
-  loop l b       = WasmM $ tell [Fix $ Loop l (map pure (execWriter (runWasmM b)))]
-  if_ l x        = WasmM $ tell [Fix $ If l (map pure (execWriter (runWasmM x))) [pure (Fix Nop)]]
-  if_else_ l x y = WasmM $ tell [Fix $ If l (map pure (execWriter (runWasmM x)))
+  block l b      = WasmM $ tell [Fix $ Block (ValBlockType l) (map pure (execWriter (runWasmM b)))]
+  loop l b       = WasmM $ tell [Fix $ Loop (ValBlockType l) (map pure (execWriter (runWasmM b)))]
+  if_ l x        = WasmM $ tell [Fix $ If (ValBlockType l) (map pure (execWriter (runWasmM x))) [pure (Fix Nop)]]
+  if_else_ l x y = WasmM $ tell [Fix $ If (ValBlockType l) (map pure (execWriter (runWasmM x)))
                               (map pure (execWriter (runWasmM y)))]
   br n           = WasmM $ tell [Fix $ Br (pure n)]
   br_if n        = WasmM $ tell [Fix $ BrIf (pure n)]
