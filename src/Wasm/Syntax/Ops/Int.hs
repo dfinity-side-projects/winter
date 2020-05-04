@@ -9,12 +9,13 @@ import           Control.DeepSeq
 import           GHC.Generics
 import           GHC.TypeLits
 
+import           Wasm.Syntax.Types
 import           Wasm.Syntax.Ops.Kind
 
 data family IntOp :: Nat -> * -> *
 
 data instance IntOp bits Unary
-  = Clz | Ctz | Popcnt
+  = Clz | Ctz | Popcnt | ExtendS PackSize
   deriving (Generic, NFData, Show)
 
 data instance IntOp bits Binary
@@ -30,7 +31,11 @@ data instance IntOp bits Compare
   deriving (Generic, NFData, Show)
 
 data instance IntOp bits Convert
-  = ExtendSI32 | ExtendUI32 | WrapI64 | TruncSF32 | TruncUF32 | TruncSF64 | TruncUF64 | ReinterpretFloat
+  = ExtendSI32 | ExtendUI32
+  | WrapI64
+  | TruncSF32 | TruncUF32 | TruncSF64 | TruncUF64
+  | TruncSSatF32 | TruncUSatF32 | TruncSSatF64 | TruncUSatF64
+  | ReinterpretFloat
   deriving (Generic, NFData, Show)
 
 type I32Op = IntOp 32

@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -30,7 +31,6 @@ import           Wasm.Binary.Guard
 import           Wasm.Binary.LEB128
 import           Wasm.Binary.Lift
 import           Wasm.Syntax.AST       as AST
-import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Ops
 import           Wasm.Syntax.Ops.Int   as Int
 import           Wasm.Syntax.Ops.Float as Float
@@ -245,6 +245,19 @@ getMemoryOp valueType size = do
     else do
       offset <- getULEB128 32
       return $ MemoryOp valueType alignment offset size
+
+getMathPrefix :: Get (InstrF phrase x)
+getMathPrefix = getWord8 >>= \case
+  0x00 -> return $ Convert $ I32ConvertOp Int.TruncSSatF32
+  0x01 -> return $ Convert $ I32ConvertOp Int.TruncUSatF32
+  0x02 -> return $ Convert $ I32ConvertOp Int.TruncSSatF64
+  0x03 -> return $ Convert $ I32ConvertOp Int.TruncUSatF64
+  0x04 -> return $ Convert $ I64ConvertOp Int.TruncSSatF32
+  0x05 -> return $ Convert $ I64ConvertOp Int.TruncUSatF32
+  0x06 -> return $ Convert $ I64ConvertOp Int.TruncSSatF64
+  0x07 -> return $ Convert $ I64ConvertOp Int.TruncUSatF64
+  byte -> error "getMathPrefix: illegal op %d" byte
+
 
 getInstr :: Decodable phrase => Get (Instr phrase)
 getInstr = Fix <$> do
@@ -549,6 +562,16 @@ getInstr = Fix <$> do
     0xBA -> return $ Convert $ F64ConvertOp Float.ConvertUI64
     0xBB -> return $ Convert $ F64ConvertOp Float.PromoteF32
     0xBF -> return $ Convert $ F64ConvertOp Float.ReinterpretInt
+
+    0xFC -> getMathPrefix
+
+    -- Sign extension operators
+    0xC0 -> return $ Unary $ I32UnaryOp (Int.ExtendS Pack8)
+    0xC1 -> return $ Unary $ I32UnaryOp (Int.ExtendS Pack16)
+    0xC2 -> return $ Unary $ I64UnaryOp (Int.ExtendS Pack8)
+    0xC3 -> return $ Unary $ I64UnaryOp (Int.ExtendS Pack16)
+    0xC4 -> return $ Unary $ I64UnaryOp (Int.ExtendS Pack32)
+
 
     -- Unexpected instruction.
     _    -> fail $ printf "getInstr: unexpected instruction: 0x%02X" byte

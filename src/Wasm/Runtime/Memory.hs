@@ -70,12 +70,6 @@ data MemoryError
 pageSize :: Size
 pageSize = 0x10000 {- 64 KiB -}
 
-packedSize :: PackSize -> Size
-packedSize = \case
-  Pack8 -> 1
-  Pack16 -> 2
-  Pack32 -> 4
-
 withinLimits :: Size -> Maybe Size -> Bool
 withinLimits n = \case
   Nothing -> True

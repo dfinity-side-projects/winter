@@ -11,7 +11,6 @@ import Data.Int
 import Data.Void
 
 import Wasm.Syntax.AST
-import Wasm.Syntax.Memory
 import Wasm.Syntax.Values
 import Wasm.Syntax.Ops
 import Wasm.Syntax.Ops.Float as F

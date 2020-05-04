@@ -24,8 +24,8 @@ haskellPackages = pkgs.haskell.packages.${compiler};
 wasm-src = pkgs.fetchFromGitHub {
     owner  = "WebAssembly";
     repo   = "spec";
-    rev    = "v1.1";
-    sha256 = "1jsgrjqzsdmm6f5pgd947nikj7pnxx1mqdnz16j7s62rg8x06h7d";
+    rev    = "opam-1.1.1";
+    sha256 = "1kp72yv4k176i94np0m09g10cviqp2pnpm7jmiq6ik7fmmbknk7c";
   };
 
 drv = haskellPackages.developPackage {

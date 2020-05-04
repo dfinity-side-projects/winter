@@ -21,7 +21,6 @@ import qualified Data.Vector as V
 import GHC.Generics
 import Lens.Micro.Platform as Lens
 
-import Wasm.Syntax.Memory
 import Wasm.Syntax.Ops
 import Wasm.Syntax.Ops.Float as F
 import Wasm.Syntax.Ops.Int as I

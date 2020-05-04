@@ -147,11 +147,18 @@ class Numeric t => IntType t where
   default popcnt :: (Bits t, Num t) => t -> t
   popcnt = fromIntegral . popCount
 
+  extend_s :: PackSize -> t -> t
+  default extend_s :: FiniteBits t => PackSize -> t -> t
+  extend_s ps x = (x `shiftL` sh) `shiftR` sh
+    where sh = finiteBitSize x - 8 * fromIntegral (packedSize ps)
+
+
   intUnOp :: IntOp n Unary -> t -> t
   intUnOp op x = case op of
     Clz -> clz x
     Ctz -> ctz x
     Popcnt -> popcnt x
+    ExtendS ps -> extend_s ps x
 
   iadd :: t -> t -> t
   default iadd :: Num t => t -> t -> t
@@ -421,6 +428,18 @@ i32_trunc_s_f64 = truncate
 i32_trunc_u_f64 :: Double -> Word32
 i32_trunc_u_f64 = truncate
 
+i32_trunc_sat_s_f32 :: Float -> Int32
+i32_trunc_sat_s_f32 = truncate
+
+i32_trunc_sat_u_f32 :: Float -> Word32
+i32_trunc_sat_u_f32 = truncate
+
+i32_trunc_sat_s_f64 :: Double -> Int32
+i32_trunc_sat_s_f64 = truncate
+
+i32_trunc_sat_u_f64 :: Double -> Word32
+i32_trunc_sat_u_f64 = truncate
+
 i32_reinterpret_f32 :: Float -> Int32
 i32_reinterpret_f32 = floatToBits
 
@@ -441,6 +460,18 @@ i64_trunc_s_f64 = truncate
 
 i64_trunc_u_f64 :: Double -> Word64
 i64_trunc_u_f64 = truncate
+
+i64_trunc_sat_s_f32 :: Float -> Int64
+i64_trunc_sat_s_f32 = truncate
+
+i64_trunc_sat_u_f32 :: Float -> Word64
+i64_trunc_sat_u_f32 = truncate
+
+i64_trunc_sat_s_f64 :: Double -> Int64
+i64_trunc_sat_s_f64 = truncate
+
+i64_trunc_sat_u_f64 :: Double -> Word64
+i64_trunc_sat_u_f64 = truncate
 
 i64_reinterpret_f64 :: Double -> Int64
 i64_reinterpret_f64 = doubleToBits
@@ -490,6 +521,10 @@ instance IntType Int32 where
     TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
     TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
     TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
+    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
+    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
+    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
+    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
@@ -511,6 +546,10 @@ instance IntType Word32 where
     TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
     TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
     TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
+    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
+    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
+    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
+    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
@@ -532,6 +571,10 @@ instance IntType Int64 where
     TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
     TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
     TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
@@ -553,6 +596,10 @@ instance IntType Word64 where
     TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
     TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
     TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
     ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral

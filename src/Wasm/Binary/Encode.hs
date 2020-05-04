@@ -21,7 +21,6 @@ import           Data.Word
 import           Wasm.Binary.LEB128
 import           Wasm.Binary.Lift
 import           Wasm.Syntax.AST
-import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Ops
 import           Wasm.Syntax.Ops.Int   as Int
 import           Wasm.Syntax.Ops.Float as Float

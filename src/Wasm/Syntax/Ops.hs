@@ -8,7 +8,6 @@ import           Control.DeepSeq
 import           GHC.Generics
 import           Lens.Micro.Platform
 
-import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Ops.Float
 import           Wasm.Syntax.Ops.Int
 import           Wasm.Syntax.Ops.Kind

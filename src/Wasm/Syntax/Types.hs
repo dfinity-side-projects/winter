@@ -85,6 +85,18 @@ _ExternGlobalType :: Traversal' ExternType GlobalType
 _ExternGlobalType f (ExternGlobalType x) = ExternGlobalType <$> f x
 _ExternGlobalType _ x                    = pure x
 
+data PackSize = Pack8 | Pack16 | Pack32
+  deriving (Eq, Generic, NFData, Ord, Show)
+
+packedSize :: PackSize -> Int32
+packedSize = \case
+  Pack8 -> 1
+  Pack16 -> 2
+  Pack32 -> 4
+
+data Extension = SX | ZX
+  deriving (Eq, Generic, NFData, Ord, Show)
+
 valueTypeSize :: ValueType -> Int32
 valueTypeSize = \case
   I32Type -> 4
