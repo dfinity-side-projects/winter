@@ -27,7 +27,7 @@ Library
     bytestring,
     containers,
     data-default-class,
-    data-fix,
+    data-fix (== 0.2.*),
     deepseq,
     lifted-base,
     monad-control,
