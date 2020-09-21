@@ -13,7 +13,7 @@ wat2Wasm contents = do
   wasm <- emptyTempFile "." "test.wasm"
   writeFile wat contents
   (exit, _out, err) <-
-    readProcessWithExitCode "wat2wasm" ["--enable-multi-value", "--enable-sign-extension", wat, "-o", wasm] ""
+    readProcessWithExitCode "wat2wasm" [wat, "-o", wasm] ""
   case exit of
     ExitSuccess   -> do
       res <- BL.readFile wasm
