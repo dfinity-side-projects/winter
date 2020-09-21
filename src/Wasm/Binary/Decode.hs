@@ -241,7 +241,7 @@ getMemoryOp :: ValueType -> Maybe size -> Get (MemoryOp size)
 getMemoryOp valueType size = do
   alignment <- getULEB128 32
   if alignment > 32
-    then error "getMemoryOp: invalid alignment: %d" alignment
+    then fail (printf "getMemoryOp: invalid alignment: %d" alignment)
     else do
       offset <- getULEB128 32
       return $ MemoryOp valueType alignment offset size
@@ -256,7 +256,7 @@ getMathPrefix = getWord8 >>= \case
   0x05 -> return $ Convert $ I64ConvertOp Int.TruncUSatF32
   0x06 -> return $ Convert $ I64ConvertOp Int.TruncSSatF64
   0x07 -> return $ Convert $ I64ConvertOp Int.TruncUSatF64
-  byte -> error "getMathPrefix: illegal op %d" byte
+  byte -> fail (printf "getMathPrefix: illegal op 0x%x" byte)
 
 
 getInstr :: Decodable phrase => Get (Instr phrase)
