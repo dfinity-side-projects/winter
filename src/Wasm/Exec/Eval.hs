@@ -812,7 +812,7 @@ initMemory mods inst s@(value -> seg) = do
   liftMem (region s) $
     Memory.storeBytes mem (fromIntegral offset) (seg^.segmentInit)
 
-addImport :: (Regioned f, PrimMonad m)
+addImport :: (Regioned f, Show1 f, PrimMonad m)
           => ModuleInst f m
           -> Extern f m
           -> f (Import f)
@@ -820,7 +820,8 @@ addImport :: (Regioned f, PrimMonad m)
 addImport inst ext im = do
   typ <- lift $ externTypeOf ext
   if not (matchExternType typ (importTypeFor (inst^.miModule) (value im)))
-    then throwError $ EvalLinkError (region im) "incompatible import type"
+    then throwError $ EvalLinkError (region im) $
+       "incompatible import type for import: " ++ show (value im)
     else pure $ case ext of
       ExternFunc func   -> inst & miFuncs    %~ (func `V.cons`)
       ExternTable tab   -> inst & miTables   %~ (tab  `V.cons`)
