@@ -9,7 +9,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        ghc: [ghc865, ghc882]
+        ghc: [ghc882]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v1
