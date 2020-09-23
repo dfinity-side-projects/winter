@@ -247,7 +247,7 @@ getMemoryOp valueType size = do
       return $ MemoryOp valueType alignment offset size
 
 getMathPrefix :: Get (InstrF phrase x)
-getMathPrefix = getWord8 >>= \case
+getMathPrefix = getULEB128 32 >>= \case
   0x00 -> return $ Convert $ I32ConvertOp Int.TruncSSatF32
   0x01 -> return $ Convert $ I32ConvertOp Int.TruncUSatF32
   0x02 -> return $ Convert $ I32ConvertOp Int.TruncSSatF64
@@ -257,7 +257,6 @@ getMathPrefix = getWord8 >>= \case
   0x06 -> return $ Convert $ I64ConvertOp Int.TruncSSatF64
   0x07 -> return $ Convert $ I64ConvertOp Int.TruncUSatF64
   byte -> fail (printf "getMathPrefix: illegal op 0x%x" byte)
-
 
 getInstr :: Decodable phrase => Get (Instr phrase)
 getInstr = Fix <$> do
