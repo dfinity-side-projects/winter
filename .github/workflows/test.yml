@@ -13,5 +13,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v1
-    - uses: cachix/install-nix-action@v6
-    - run: nix-build --argstr compiler ${{ matrix.ghc }} --max-jobs 10
+    - name: Cache /nix/store
+      uses: actions/cache@v1
+      with:
+        path: /nix/store
+        key: ${{ matrix.os }}-nix-store
+    - name: Install nix
+      uses: cachix/install-nix-action@v10
+      with:
+        skip_adding_nixpkgs_channel: false
+    - name: Build
+      run: nix-build --argstr compiler ${{ matrix.ghc }} --max-jobs 10
