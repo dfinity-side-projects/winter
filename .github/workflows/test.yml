@@ -23,4 +23,4 @@ jobs:
       with:
         skip_adding_nixpkgs_channel: false
     - name: Build
-      run: nix-build --argstr compiler ${{ matrix.ghc }} --max-jobs 10
+      run: nix-build --argstr compiler ${{ matrix.ghc }} --max-jobs 2
