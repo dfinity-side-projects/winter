@@ -11,7 +11,6 @@ module Wasm.Text.Winter where
 import           Control.Monad.Except
 import           Control.Monad.Primitive
 import           Data.Binary.Get
-import           Data.Default.Class (Default(..))
 import           Data.Functor.Classes
 
 import           Wasm.Text.Wast
@@ -38,7 +37,7 @@ instance (PrimMonad m, Regioned f, Decode.Decodable f, Show1 f)
   decodeModule = Right . runGet Decode.getModule
   initializeModule m names mods =
     fmap (either (Left . show) Right)
-      $ runExceptT $ Eval.initialize (m @@ def) names mods
+      $ runExceptT $ Eval.initialize m names mods
 
   invokeByName mods inst name stack =
     fmap (either (Left . show) (Right . (,inst)))

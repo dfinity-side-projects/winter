@@ -852,11 +852,11 @@ resolveImports names mods inst = flip execStateT inst $
               put m'
 
 initialize :: (Regioned f, Show1 f, PrimMonad m)
-           => f (Module f)
+           => Module f
            -> Map Text ModuleRef
            -> IntMap (ModuleInst f m)
            -> EvalT m (ModuleRef, ModuleInst f m)
-initialize (value -> mod) names mods = do
+initialize mod names mods = do
   inst <- resolveImports names mods (emptyModuleInst mod)
   let ref = nextKey mods
   inst' <- flip execStateT inst $ do
@@ -887,25 +887,25 @@ initialize (value -> mod) names mods = do
   pure (ref, inst')
 
 {-# SPECIALIZE initialize
-           :: Identity (Module Identity)
+           :: Module Identity
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Identity IO)
            -> EvalT IO (ModuleRef, ModuleInst Identity IO) #-}
 
 {-# SPECIALIZE initialize
-           :: Identity (Module Identity)
+           :: Module Identity
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Identity (ST s))
            -> EvalT (ST s) (ModuleRef, ModuleInst Identity (ST s)) #-}
 
 {-# SPECIALIZE initialize
-           :: Phrase (Module Phrase)
+           :: Module Phrase
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Phrase IO)
            -> EvalT IO (ModuleRef, ModuleInst Phrase IO) #-}
 
 {-# SPECIALIZE initialize
-           :: Phrase (Module Phrase)
+           :: Module Phrase
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Phrase (ST s))
            -> EvalT (ST s) (ModuleRef, ModuleInst Phrase (ST s)) #-}
