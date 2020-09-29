@@ -128,7 +128,7 @@ main = do
     Left  err    -> fail $ show err
     Right values -> do
       bytes <- Lazy.readFile wasm
-      let ast = Identity $ runGet getModule bytes
+      let ast = runGet getModule bytes
       result <- runExceptT $ do
         let names = singleton "Main" 1
             mods  = IntMap.singleton 1 app
