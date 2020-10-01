@@ -40,7 +40,8 @@ Library
     vector (>= 0.12.1),
     primitive,
     primitive-unaligned,
-    byte-order
+    byte-order,
+    data-binary-ieee754
   Exposed-Modules:
     Wasm.Binary.Custom
     Wasm.Binary.Decode
