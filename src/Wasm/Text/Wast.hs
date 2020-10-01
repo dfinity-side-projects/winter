@@ -503,41 +503,6 @@ invokeModule readModule decl k = do
 -- These tests currently do not work.
 ignoredFunctions :: [String]
 ignoredFunctions = [
-  -- float_misc.wast
-  "f32.abs",
-  "f64.abs",
-  "f32.neg",
-  "f64.neg",
-  "f32.copysign",
-  "f64.copysign",
-  "f64.nearest",
-  "f64.sqrt",
-
-  -- float_memory.wast
-  "f32.load",
-  "f64.load",
-
-  -- local_tee.wast
-  "as-unary-operand",
-
-  -- select.wast
-  "select_f32",
-  "select_f64",
-
-  -- address.wast
-  "32_good5",
-  "64_good5",
-
-  -- traps.wast
-  "no_dce.i32.trunc_f32_s",
-  "no_dce.i32.trunc_f32_u",
-  "no_dce.i32.trunc_f64_s",
-  "no_dce.i32.trunc_f64_u",
-  "no_dce.i64.trunc_f32_s",
-  "no_dce.i64.trunc_f32_u",
-  "no_dce.i64.trunc_f64_s",
-  "no_dce.i64.trunc_f64_u",
-
   -- linking.wast
   "get table[0]"
   ]
