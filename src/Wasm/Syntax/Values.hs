@@ -16,7 +16,7 @@ data Value
   | I64 {-# UNPACK #-} !Int64
   | F32 {-# UNPACK #-} !Float
   | F64 {-# UNPACK #-} !Double
-  deriving (Eq, Generic, NFData, Ord, Show)
+  deriving (Generic, NFData, Show)
 
 typeOf :: Value -> ValueType
 typeOf = \case

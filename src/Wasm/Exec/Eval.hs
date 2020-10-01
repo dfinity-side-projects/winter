@@ -82,7 +82,7 @@ data EvalError
   | EvalTableError Region Table.TableError
   | EvalExhaustionError Region String
   | EvalNumericError Region NumericError
-  deriving (Show, Eq)
+  deriving (Show)
 
 instance Exception EvalError
 

@@ -31,7 +31,7 @@ data NumericError
   = NumericTypeError Int Value ValueType
   | NumericIntegerDivideByZero
   | NumericIntegerOverflow
-  deriving (Show, Eq)
+  deriving (Show)
 
 class Numeric t where
   type OpType t :: * -> *
