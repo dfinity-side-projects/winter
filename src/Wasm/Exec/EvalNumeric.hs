@@ -318,20 +318,28 @@ class Numeric t => FloatType t where
   fsqrt = sqrt
 
   fceil :: t -> t
-  default fceil :: RealFrac t => t -> t
-  fceil = (fromIntegral :: Integer -> t) . ceiling
+  default fceil :: RealFloat t => t -> t
+  fceil a
+    | isNaN a = 0 / 0 -- NaN
+    | otherwise = (fromIntegral :: Integer -> t) (ceiling a)
 
   ffloor :: t -> t
-  default ffloor :: RealFrac t => t -> t
-  ffloor = (fromIntegral :: Integer -> t) . floor
+  default ffloor :: RealFloat t => t -> t
+  ffloor a
+    | isNaN a = 0 / 0 -- NaN
+    | otherwise = fromIntegral (floor a :: Integer)
 
   ftrunc :: t -> t
-  default ftrunc :: RealFrac t => t -> t
-  ftrunc = (fromIntegral :: Integer -> t) . truncate
+  default ftrunc :: RealFloat t => t -> t
+  ftrunc a
+    | isNaN a = 0 / 0 -- NaN
+    | otherwise = (fromIntegral :: Integer -> t) (truncate a)
 
   fnearest :: t -> t
-  default fnearest :: RealFrac t => t -> t
-  fnearest = (fromIntegral :: Integer -> t) . round
+  default fnearest :: RealFloat t => t -> t
+  fnearest a
+    | isNaN a = 0 / 0 -- NaN
+    | otherwise = (fromIntegral :: Integer -> t) (round a)
 
   floatUnOp :: FloatOp n Unary -> t -> t
   floatUnOp op x = case op of
