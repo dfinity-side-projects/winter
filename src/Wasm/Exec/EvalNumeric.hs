@@ -18,6 +18,9 @@ import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
 
+-- Bitwise conversion between words and floats
+import Data.Binary.IEEE754 (wordToDouble, doubleToWord, wordToFloat, floatToWord)
+
 import Wasm.Runtime.Memory
 import Wasm.Syntax.Ops.Float as F
 import Wasm.Syntax.Ops.Int as I
@@ -622,6 +625,18 @@ instance FloatType Float where
     ConvertUI64    -> fmap (toValue . f32_convert_u_i64) . fromValue 1
     ReinterpretInt -> fmap (toValue . f32_reinterpret_i32) . fromValue 1
 
+  fmin a b
+    | a == b = wordToFloat (floatToWord a .|. floatToWord b)
+    | a < b = a
+    | a > b = b
+    | otherwise = 0 / 0 -- NaN
+
+  fmax a b
+    | a == b = wordToFloat (floatToWord a .|. floatToWord b)
+    | a < b = b
+    | a > b = a
+    | otherwise = 0 / 0 -- NaN
+
 instance FloatType Double where
   floatCvtOp op = case op of
     DemoteF64      -> error "DemoteF64 on Double has no meaning"
@@ -631,3 +646,15 @@ instance FloatType Double where
     ConvertSI64    -> fmap (toValue . f64_convert_s_i64) . fromValue 1
     ConvertUI64    -> fmap (toValue . f64_convert_u_i64) . fromValue 1
     ReinterpretInt -> fmap (toValue . f64_reinterpret_i64) . fromValue 1
+
+  fmin a b
+    | a == b = wordToDouble (doubleToWord a .|. doubleToWord b)
+    | a < b = a
+    | a > b = b
+    | otherwise = 0 / 0 -- NaN
+
+  fmax a b
+    | a == b = wordToDouble (doubleToWord a .|. doubleToWord b)
+    | a < b = b
+    | a > b = a
+    | otherwise = 0 / 0 -- NaN
