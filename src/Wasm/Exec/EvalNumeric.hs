@@ -34,6 +34,7 @@ data NumericError
   = NumericTypeError Int Value ValueType
   | NumericIntegerDivideByZero
   | NumericIntegerOverflow
+  | NumericInvalidConversionToInteger
   deriving (Show)
 
 class Numeric t where
@@ -424,20 +425,25 @@ class Numeric t => FloatType t where
 
   floatCvtOp :: FloatOp n Convert -> Value -> Either NumericError Value
 
+checkNonNaN :: RealFloat f => f -> Either NumericError ()
+checkNonNaN f
+  | isNaN f = Left NumericInvalidConversionToInteger
+  | otherwise = Right ()
+
 i32_wrap_i64 :: Int64 -> Int32
 i32_wrap_i64 = fromIntegral
 
-i32_trunc_s_f32 :: Float -> Int32
-i32_trunc_s_f32 = truncate
+i32_trunc_s_f32 :: Float -> Either NumericError Int32
+i32_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
 
-i32_trunc_u_f32 :: Float -> Word32
-i32_trunc_u_f32 = truncate
+i32_trunc_u_f32 :: Float -> Either NumericError Word32
+i32_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
 
-i32_trunc_s_f64 :: Double -> Int32
-i32_trunc_s_f64 = truncate
+i32_trunc_s_f64 :: Double -> Either NumericError Int32
+i32_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
 
-i32_trunc_u_f64 :: Double -> Word32
-i32_trunc_u_f64 = truncate
+i32_trunc_u_f64 :: Double -> Either NumericError Word32
+i32_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
 
 i32_trunc_sat_s_f32 :: Float -> Int32
 i32_trunc_sat_s_f32 = truncate
@@ -460,17 +466,17 @@ i64_extend_s_i32 = fromIntegral
 i64_extend_u_i32 :: Word32 -> Word64
 i64_extend_u_i32 = fromIntegral
 
-i64_trunc_s_f32 :: Float -> Int64
-i64_trunc_s_f32 = truncate
+i64_trunc_s_f32 :: Float -> Either NumericError Int64
+i64_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
 
-i64_trunc_u_f32 :: Float -> Word64
-i64_trunc_u_f32 = truncate
+i64_trunc_u_f32 :: Float -> Either NumericError Word64
+i64_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
 
-i64_trunc_s_f64 :: Double -> Int64
-i64_trunc_s_f64 = truncate
+i64_trunc_s_f64 :: Double -> Either NumericError Int64
+i64_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
 
-i64_trunc_u_f64 :: Double -> Word64
-i64_trunc_u_f64 = truncate
+i64_trunc_u_f64 :: Double -> Either NumericError Word64
+i64_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
 
 i64_trunc_sat_s_f32 :: Float -> Int64
 i64_trunc_sat_s_f32 = truncate
@@ -524,19 +530,19 @@ f64_reinterpret_i64 :: Int64 -> Double
 f64_reinterpret_i64 = doubleFromBits
 
 instance IntType Int32 where
-  intCvtOp op = case op of
-    WrapI64          -> fmap (toValue . i32_wrap_i64) . fromValue 1
+  intCvtOp op x = case op of
+    WrapI64          -> fmap (toValue . i32_wrap_i64) (fromValue 1 x)
     ExtendSI32       -> error "ExtendSI32 on Int32 has no meaning"
     ExtendUI32       -> error "ExtendUI32 on Int32 has no meaning"
-    TruncSF32        -> fmap (toValue . i32_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f64)
+    TruncSSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f32)
+    TruncUSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f32)
+    TruncSSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f64)
+    TruncUSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f64)
+    ReinterpretFloat -> fmap toValue (fromValue 1 x >>= return . i32_reinterpret_f32)
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word32) . fromIntegral
@@ -549,19 +555,19 @@ instance IntType Int32 where
   ige_u x y = (fromIntegral x :: Word32) >= (fromIntegral y :: Word32)
 
 instance IntType Word32 where
-  intCvtOp op = case op of
-    WrapI64          -> fmap (toValue . i32_wrap_i64) . fromValue 1
+  intCvtOp op x = case op of
+    WrapI64          -> fmap toValue (fromValue 1 x >>= return . i32_wrap_i64)
     ExtendSI32       -> error "ExtendSI32 on Word32 has no meaning"
     ExtendUI32       -> error "ExtendSI32 on Word32 has no meaning"
-    TruncSF32        -> fmap (toValue . i32_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f64)
+    TruncSSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f32)
+    TruncUSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f32)
+    TruncSSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f64)
+    TruncUSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f64)
+    ReinterpretFloat -> fmap toValue (fromValue 1 x >>= return . i32_reinterpret_f32)
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int32) . fromIntegral
@@ -574,19 +580,19 @@ instance IntType Word32 where
   ige_s x y = (fromIntegral x :: Int32) >= (fromIntegral y :: Int32)
 
 instance IntType Int64 where
-  intCvtOp op = case op of
+  intCvtOp op x = case op of
     WrapI64          -> error "WrapI64 on Int64 has no meaning"
-    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) . fromValue 1
-    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) . fromValue 1
-    TruncSF32        -> fmap (toValue . i64_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
+    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) (fromValue 1 x)
+    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) (fromValue 1 x)
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f64)
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) (fromValue 1 x)
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) (fromValue 1 x)
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) (fromValue 1 x)
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) (fromValue 1 x)
+    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) (fromValue 1 x)
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word64) . fromIntegral
@@ -599,19 +605,19 @@ instance IntType Int64 where
   ige_u x y = (fromIntegral x :: Word64) >= (fromIntegral y :: Word64)
 
 instance IntType Word64 where
-  intCvtOp op = case op of
+  intCvtOp op x = case op of
     WrapI64          -> error "WrapI64 on Word64 has no meaning"
-    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) . fromValue 1
-    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) . fromValue 1
-    TruncSF32        -> fmap (toValue . i64_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
+    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) (fromValue 1 x)
+    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) (fromValue 1 x)
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f64)
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) (fromValue 1 x)
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) (fromValue 1 x)
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) (fromValue 1 x)
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) (fromValue 1 x)
+    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) (fromValue 1 x)
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int64) . fromIntegral
