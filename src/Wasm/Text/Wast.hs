@@ -66,7 +66,7 @@ import           Wasm.Util.Source
 
 -- import           Debug.Trace
 
-class (Show (Value w), Eq (Value w)) => WasmEngine w m where
+class Show (Value w) => WasmEngine w m where
   type Value w :: *
   type Module w :: *
   type ModuleInst w m :: *
@@ -550,11 +550,11 @@ parseWastFile
   -> IntMap (ModuleInst w m)
   -> (String -> m ByteString)                       -- convert module into Wasm binary
   -> (String -> m ())                               -- names a step
-  -> (forall a. (Eq a, Show a) => String -> a -> a -> m ()) -- establishes an assertion
+  -> ([Value w] -> [Value w] -> Bool)
   -> (String -> m ())                               -- a negative assertion
   -> m ()
-parseWastFile path input preNames preMods readModule step assertEqual assertFailure =
-  case runP (script @_ @m) () path input of
+parseWastFile path input preNames preMods readModule step valEq assertFailure =
+  case runP (script @w @m) () path input of
     Left err -> fail $ show err
     Right wast -> flip evalStateT (newCheckState preNames preMods) $
       forM_ wast $ \(l,c) -> lift (step ("line " ++ show l)) >> case c of
@@ -571,9 +571,13 @@ parseWastFile path input preNames preMods readModule step assertEqual assertFail
 
           AssertReturn a exps -> do
             let exps' = exps^..traverse._Constant
-            invokeAction a $ \eres ->
-              lift $ assertEqual (prettyAction @w @m a ++ " == " ++ show exps')
-                (Right exps') (fmap fst eres)
+            invokeAction a $ lift . \case
+              Left err -> assertFailure $ "assert_return failed: " ++ err
+              Right (vals, _mod) ->
+                unless (valEq vals exps') $ assertFailure $
+                  prettyAction @w @m a ++ " == " ++ show exps' ++ "\n" ++
+                  "expected: " ++ show exps' ++ "\n" ++
+                  " but got: " ++ show vals
 
           AssertTrap a msg ->
             invokeAction a $ \case
