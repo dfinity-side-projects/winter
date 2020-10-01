@@ -377,8 +377,6 @@ class Numeric t => FloatType t where
   fmax = max
 
   fcopysign :: t -> t -> t
-  default fcopysign :: (Ord t, Num t) => t -> t -> t
-  fcopysign = \x y -> if x < 0 then - (abs y) else abs y
 
   floatBinOp :: FloatOp n Binary -> t -> t -> Either NumericError t
   floatBinOp op x y = case op of
@@ -651,6 +649,12 @@ instance FloatType Float where
     | a > b = a
     | otherwise = 0 / 0 -- NaN
 
+  fcopysign f1 f2 =
+    let val = floatToWord f1 .&. 0x7FFFFFFF -- bits 0..31
+        sign = floatToWord f2 .&. 0x80000000 -- 32th bit
+     in
+        wordToFloat (sign .|. val)
+
 instance FloatType Double where
   floatCvtOp op = case op of
     DemoteF64      -> error "DemoteF64 on Double has no meaning"
@@ -672,3 +676,9 @@ instance FloatType Double where
     | a < b = b
     | a > b = a
     | otherwise = 0 / 0 -- NaN
+
+  fcopysign f1 f2 =
+    let val = doubleToWord f1 .&. 0x7FFFFFFFFFFFFFFF -- bits 0..33
+        sign = doubleToWord f2 .&. 0x8000000000000000 -- 64th bit
+     in
+        wordToDouble (sign .|. val)
