@@ -32,7 +32,6 @@ main = do
             && "float_literals.wast" /= file
             && "float_exprs.wast" /= file
             && "conversions.wast" /= file
-            && "address.wast" /= file
         ]
 
   defaultMain $ testGroup "main"
