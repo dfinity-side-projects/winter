@@ -17,6 +17,7 @@ import Data.Bits
 import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
+import GHC.Float (float2Double)
 
 -- Bitwise conversion between words and floats
 import Data.Binary.IEEE754 (wordToDouble, doubleToWord, wordToFloat, floatToWord)
@@ -27,6 +28,8 @@ import Wasm.Syntax.Ops.Int as I
 import Wasm.Syntax.Ops.Kind
 import Wasm.Syntax.Types
 import Wasm.Syntax.Values
+
+import Debug.Trace
 
 {- Runtime type errors -}
 
@@ -432,28 +435,64 @@ i32_wrap_i64 :: Int64 -> Int32
 i32_wrap_i64 = fromIntegral
 
 i32_trunc_s_f32 :: Float -> Either NumericError Int32
-i32_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_s_f32 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f < fromIntegral (minBound :: Int32) then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i32_trunc_u_f32 :: Float -> Either NumericError Word32
-i32_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_u_f32 f = do
+    checkNonNaN f
+    if f >= (negate (fromIntegral (minBound :: Int32))) * 2.0 || f <= -1.0 then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i32_trunc_s_f64 :: Double -> Either NumericError Int32
-i32_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f <= fromIntegral (minBound :: Int32) - 1.0 then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i32_trunc_u_f64 :: Double -> Either NumericError Word32
-i32_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_u_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) * 2.0 || f <= -1.0 then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i32_trunc_sat_s_f32 :: Float -> Int32
-i32_trunc_sat_s_f32 = truncate
+i32_trunc_sat_s_f32 f
+  | isNaN f = 0
+  | f < fromIntegral (minBound :: Int32) = minBound
+  | f >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate f
 
-i32_trunc_sat_u_f32 :: Float -> Word32
-i32_trunc_sat_u_f32 = truncate
+i32_trunc_sat_u_f32 :: Float -> Int32
+i32_trunc_sat_u_f32 f
+  | isNaN f = 0
+  | f <= -1.0 = 0
+  | f >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = truncate f
 
 i32_trunc_sat_s_f64 :: Double -> Int32
-i32_trunc_sat_s_f64 = truncate
+i32_trunc_sat_s_f64 d
+  | isNaN d = 0
+  | d < fromIntegral (minBound :: Int32) = minBound
+  | d >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate d
 
-i32_trunc_sat_u_f64 :: Double -> Word32
-i32_trunc_sat_u_f64 = truncate
+i32_trunc_sat_u_f64 :: Double -> Int32
+i32_trunc_sat_u_f64 d
+  | isNaN d = 0
+  | d <= -1.0 = 0
+  | d >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = fromIntegral (truncate d :: Int64)
 
 i32_reinterpret_f32 :: Float -> Int32
 i32_reinterpret_f32 = floatToBits
@@ -465,16 +504,50 @@ i64_extend_u_i32 :: Word32 -> Word64
 i64_extend_u_i32 = fromIntegral
 
 i64_trunc_s_f32 :: Float -> Either NumericError Int64
-i64_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_s_f32 f = do
+    checkNonNaN f
+    let f' = float2Double f
+    if f' >= negate (fromIntegral (minBound :: Int64)) || f' < fromIntegral (minBound :: Int64) then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i64_trunc_u_f32 :: Float -> Either NumericError Word64
-i64_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_u_f32 f = do
+    checkNonNaN f
+    let f' = float2Double f
+    if f' >= negate (fromIntegral (minBound :: Int64)) * 2.0 || f <= -1.0 then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
 i64_trunc_s_f64 :: Double -> Either NumericError Int64
-i64_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64)) || f < fromIntegral (minBound :: Int64) then
+      Left NumericInvalidConversionToInteger
+    else
+      Right (truncate f)
 
-i64_trunc_u_f64 :: Double -> Either NumericError Word64
-i64_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_u_f64 :: Double -> Either NumericError Int64
+i64_trunc_u_f64 f = do
+    checkNonNaN f
+    -- trace ("f=" ++ show f) (return ())
+    -- if f >= negate (fromIntegral (minBound :: Int64)) * 2.0 || f <= -1.0 then
+    --   Left NumericInvalidConversionToInteger
+    -- else
+    --   Right (truncate f)
+    Right (truncate f)
+
+
+--     if xf >= -.Int64.(to_float min_int) *. 2.0 || xf <= -1.0 then
+
+
+            -- if f >= -(i64::MIN as f64) * 2f64 || f <= -1f64 {
+            --     return Err(ExecError::Trap);
+            -- }
+
+
 
 i64_trunc_sat_s_f32 :: Float -> Int64
 i64_trunc_sat_s_f32 = truncate
@@ -521,8 +594,12 @@ f64_convert_u_i32 = fromIntegral
 f64_convert_s_i64 :: Int64 -> Double
 f64_convert_s_i64 = fromIntegral
 
-f64_convert_u_i64 :: Word64 -> Double
-f64_convert_u_i64 = fromIntegral
+f64_convert_u_i64 :: Int64 -> Double
+f64_convert_u_i64 i = fromIntegral i
+  -- | i >= 0 = fromIntegral i
+  -- | otherwise =
+  --     let w = fromIntegral i :: Word in
+  --     fromIntegral ((w `shiftR` 1) .|. (w .&. 1)) * 2.0
 
 f64_reinterpret_i64 :: Int64 -> Double
 f64_reinterpret_i64 = doubleFromBits
