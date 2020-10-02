@@ -53,7 +53,7 @@ data MemoryInst m = MemoryInst
   }
 
 instance Show (MemoryInst m) where
-  showsPrec _d MemoryInst {..} = showString "MemoryInst"
+  showsPrec _d MemoryInst {} = showString "MemoryInst"
 
 makeLenses ''MemoryInst
 
