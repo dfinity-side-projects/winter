@@ -34,6 +34,8 @@ import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
+import           Data.Binary.IEEE754 (wordToDouble, doubleToWord, wordToFloat, floatToWord)
+import           Data.Bits (clearBit)
 import           Data.ByteString.Lazy (ByteString)
 import           Data.ByteString.Lazy.Char8 as Byte (pack)
 import           Data.Char
@@ -199,9 +201,9 @@ expr = do
   return x
  where
   constant =  go "i32.const" (const_i32 @w @m) (fromIntegral <$> negOr_ int)
-          <|> go "f32.const" (const_f32 @w @m) (negOr_ float)
+          <|> go "f32.const" (const_f32 @w @m) (negOr_ float32)
           <|> go "i64.const" (const_i64 @w @m) (negOr_ int)
-          <|> go "f64.const" (const_f64 @w @m) (negOr_ float)
+          <|> go "f64.const" (const_f64 @w @m) (negOr_ float64)
    where
     int         = do{ f <- P.lexeme lexer sign
                     ; n <- nat
@@ -240,7 +242,13 @@ expr = do
     negOr_ p = do
       neg <- optional (char '-' *> whiteSpace)
       x <- p
-      return $ case neg of Just _ -> -x; Nothing -> x
+      return $ case neg of Just _ -> negate x; Nothing -> x
+
+    float32 :: Parser Float
+    float32 = fmap normalizeFloatNaN float
+
+    float64 :: Parser Double
+    float64 = fmap normalizeDoubleNaN float
 
     float :: FloatingHexReader a => Parser a
     float =  try (fromRational . toRational <$> P.float lexer)
@@ -267,6 +275,19 @@ expr = do
     go k f p = try $ keyword k *> (Constant . f <$> p)
 
   invoke = keyword "invoke" *> (Invoke <$> string_ <*> many (expr @_ @m))
+
+-- | In GHC, 0/0 produces a negative NaN instead of positive, so to parse "nan"
+-- to positive NaN and "-nan" to negative we normalize parsed values of "nan".
+normalizeFloatNaN :: Float -> Float
+normalizeFloatNaN f
+  | isNaN f = wordToFloat (clearBit (floatToWord f) 31)
+  | otherwise = f
+
+-- | `normalizeFloatNaN`, but for doubles.
+normalizeDoubleNaN :: Double -> Double
+normalizeDoubleNaN d
+  | isNaN d = wordToDouble (clearBit (doubleToWord d) 63)
+  | otherwise = d
 
 cmd :: forall w m. WasmEngine w m => Parser (Cmd w)
 cmd = do
