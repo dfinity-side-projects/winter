@@ -6,14 +6,15 @@
     then abort "winter requires at least nix 2.0"
     else import (builtins.fetchTarball {
        url = "https://github.com/NixOS/nixpkgs/archive/${rev}.tar.gz";
-       inherit sha256; }) {
-       config.allowUnfree = true;
-       config.allowBroken = false;
-       overlays = [ (self: super: {
-        # due to https://github.com/WebAssembly/wabt/issues/1551:
-        wabt = super.callPackage ./wabt.nix {};
-      }) ];
-    })
+       inherit sha256;
+      }) {
+         config.allowUnfree = true;
+         config.allowBroken = false;
+         overlays = [ (self: super: {
+          # due to https://github.com/WebAssembly/wabt/issues/1551:
+          wabt = super.callPackage ./wabt.nix {};
+        }) ];
+      }
 
 , returnShellEnv ? pkgs.lib.inNixShell
 , mkDerivation   ? null
