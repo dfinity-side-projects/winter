@@ -1,7 +1,5 @@
-{ compiler ? "ghc882"
-
-, rev    ? "1480c1a7b5628741e5d87b53e34ed123286dfc5a"
-, sha256 ? "19ahkbf4kvp7jd781dixiwydbyqmhqjim0rgq6zgyr5ac3wcigm0"
+{ rev    ? "66cd39409e8ae1e2981edfb33bb06c164893d70d" # release-20.09
+, sha256 ? "1c44akgqbqsm2b6k5b850lb0q7wq5l5p4hm6bqbaif1h05sc2bkx"
 
 , pkgs   ?
     if builtins.compareVersions builtins.nixVersion "2.0" < 0
@@ -19,8 +17,6 @@
 
 let
 
-haskellPackages = pkgs.haskell.packages.${compiler};
-
 wasm-src = pkgs.fetchFromGitHub {
     owner  = "WebAssembly";
     repo   = "spec";
@@ -28,7 +24,7 @@ wasm-src = pkgs.fetchFromGitHub {
     sha256 = "1kp72yv4k176i94np0m09g10cviqp2pnpm7jmiq6ik7fmmbknk7c";
   };
 
-drv = haskellPackages.developPackage {
+drv = pkgs.haskellPackages.developPackage {
   name = "winter";
   root = ./.;
 
