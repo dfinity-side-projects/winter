@@ -22,11 +22,11 @@
 
 let
 
-wasm-src = pkgs.fetchFromGitHub {
+spec-tests = pkgs.fetchFromGitHub {
     owner  = "WebAssembly";
-    repo   = "spec";
-    rev    = "opam-1.1.1";
-    sha256 = "1kp72yv4k176i94np0m09g10cviqp2pnpm7jmiq6ik7fmmbknk7c";
+    repo   = "testsuite";
+    rev    = "master";
+    sha256 = "1fwx2lcd8g9c5p3xq954kvhh1ivmfkp7p7f56d6697ydkb178vap";
   };
 
 drv = pkgs.haskellPackages.developPackage {
@@ -52,4 +52,4 @@ drv = pkgs.haskellPackages.developPackage {
   inherit returnShellEnv;
 };
 
-in drv.overrideAttrs(old: { WASM_SPEC_TESTS = "${wasm-src}/test/core"; })
+in drv.overrideAttrs(old: { WASM_SPEC_TESTS = "${spec-tests}"; })
