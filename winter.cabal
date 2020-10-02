@@ -40,8 +40,7 @@ Library
     vector (>= 0.12.1),
     primitive,
     primitive-unaligned,
-    byte-order,
-    data-binary-ieee754
+    byte-order
   Exposed-Modules:
     Wasm.Binary.Custom
     Wasm.Binary.Decode
@@ -70,6 +69,7 @@ Library
     Wasm.Util.NFData
     Wasm.Util.Show
     Wasm.Util.Source
+    Wasm.Util.Float
   HS-Source-Dirs:
     src
 

@@ -34,7 +34,6 @@ import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
-import           Data.Binary.IEEE754 (wordToDouble, doubleToWord, wordToFloat, floatToWord)
 import           Data.Bits (clearBit)
 import           Data.ByteString.Lazy (ByteString)
 import           Data.ByteString.Lazy.Char8 as Byte (pack)
@@ -55,6 +54,8 @@ import           Text.Parsec hiding ((<|>), many, optional,
 import           Text.Parsec.Language (haskellDef)
 import           Text.Parsec.String
 import qualified Text.Parsec.Token as P
+
+import           Wasm.Util.Float
 
 {-
 import           Wasm.Binary.Decode
@@ -280,13 +281,13 @@ expr = do
 -- to positive NaN and "-nan" to negative we normalize parsed values of "nan".
 normalizeFloatNaN :: Float -> Float
 normalizeFloatNaN f
-  | isNaN f = wordToFloat (clearBit (floatToWord f) 31)
+  | isNaN f = floatFromBits (clearBit (floatToBits f) 31)
   | otherwise = f
 
 -- | `normalizeFloatNaN`, but for doubles.
 normalizeDoubleNaN :: Double -> Double
 normalizeDoubleNaN d
-  | isNaN d = wordToDouble (clearBit (doubleToWord d) 63)
+  | isNaN d = doubleFromBits (clearBit (doubleToBits d) 63)
   | otherwise = d
 
 cmd :: forall w m. WasmEngine w m => Parser (Cmd w)

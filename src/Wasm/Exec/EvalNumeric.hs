@@ -18,9 +18,6 @@ import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
 
--- Bitwise conversion between words and floats
-import Data.Binary.IEEE754 (wordToDouble, doubleToWord, wordToFloat, floatToWord)
-
 import Wasm.Runtime.Memory
 import Wasm.Syntax.Ops.Float as F
 import Wasm.Syntax.Ops.Int as I
@@ -455,7 +452,7 @@ i32_trunc_sat_s_f64 = truncate
 i32_trunc_sat_u_f64 :: Double -> Word32
 i32_trunc_sat_u_f64 = truncate
 
-i32_reinterpret_f32 :: Float -> Int32
+i32_reinterpret_f32 :: Float -> Word32
 i32_reinterpret_f32 = floatToBits
 
 i64_extend_s_i32 :: Int32 -> Int64
@@ -488,7 +485,7 @@ i64_trunc_sat_s_f64 = truncate
 i64_trunc_sat_u_f64 :: Double -> Word64
 i64_trunc_sat_u_f64 = truncate
 
-i64_reinterpret_f64 :: Double -> Int64
+i64_reinterpret_f64 :: Double -> Word64
 i64_reinterpret_f64 = doubleToBits
 
 f32_demote_f64 :: Double -> Float
@@ -506,7 +503,7 @@ f32_convert_s_i64 = fromIntegral
 f32_convert_u_i64 :: Word64 -> Float
 f32_convert_u_i64 = fromIntegral
 
-f32_reinterpret_i32 :: Int32 -> Float
+f32_reinterpret_i32 :: Word32 -> Float
 f32_reinterpret_i32 = floatFromBits
 
 f64_promote_f64 :: Float -> Double
@@ -524,7 +521,7 @@ f64_convert_s_i64 = fromIntegral
 f64_convert_u_i64 :: Word64 -> Double
 f64_convert_u_i64 = fromIntegral
 
-f64_reinterpret_i64 :: Int64 -> Double
+f64_reinterpret_i64 :: Word64 -> Double
 f64_reinterpret_i64 = doubleFromBits
 
 instance IntType Int32 where
@@ -638,22 +635,22 @@ instance FloatType Float where
     ReinterpretInt -> fmap (toValue . f32_reinterpret_i32) . fromValue 1
 
   fmin a b
-    | a == b = wordToFloat (floatToWord a .|. floatToWord b)
+    | a == b = floatFromBits (floatToBits a .|. floatToBits b)
     | a < b = a
     | a > b = b
     | otherwise = 0 / 0 -- NaN
 
   fmax a b
-    | a == b = wordToFloat (floatToWord a .|. floatToWord b)
+    | a == b = floatFromBits (floatToBits a .|. floatToBits b)
     | a < b = b
     | a > b = a
     | otherwise = 0 / 0 -- NaN
 
   fcopysign f1 f2 =
-    let val = floatToWord f1 .&. 0x7FFFFFFF -- bits 0..31
-        sign = floatToWord f2 .&. 0x80000000 -- 32th bit
+    let val = floatToBits f1 .&. 0x7FFFFFFF -- bits 0..31
+        sign = floatToBits f2 .&. 0x80000000 -- 32th bit
      in
-        wordToFloat (sign .|. val)
+        floatFromBits (sign .|. val)
 
 instance FloatType Double where
   floatCvtOp op = case op of
@@ -666,19 +663,19 @@ instance FloatType Double where
     ReinterpretInt -> fmap (toValue . f64_reinterpret_i64) . fromValue 1
 
   fmin a b
-    | a == b = wordToDouble (doubleToWord a .|. doubleToWord b)
+    | a == b = doubleFromBits (doubleToBits a .|. doubleToBits b)
     | a < b = a
     | a > b = b
     | otherwise = 0 / 0 -- NaN
 
   fmax a b
-    | a == b = wordToDouble (doubleToWord a .|. doubleToWord b)
+    | a == b = doubleFromBits (doubleToBits a .|. doubleToBits b)
     | a < b = b
     | a > b = a
     | otherwise = 0 / 0 -- NaN
 
   fcopysign f1 f2 =
-    let val = doubleToWord f1 .&. 0x7FFFFFFFFFFFFFFF -- bits 0..33
-        sign = doubleToWord f2 .&. 0x8000000000000000 -- 64th bit
+    let val = doubleToBits f1 .&. 0x7FFFFFFFFFFFFFFF -- bits 0..33
+        sign = doubleToBits f2 .&. 0x8000000000000000 -- 64th bit
      in
-        wordToDouble (sign .|. val)
+        doubleFromBits (sign .|. val)
