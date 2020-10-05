@@ -24,6 +24,7 @@ import Wasm.Syntax.Ops.Int as I
 import Wasm.Syntax.Ops.Kind
 import Wasm.Syntax.Types
 import Wasm.Syntax.Values
+import Wasm.Util.Float
 
 {- Runtime type errors -}
 
@@ -303,6 +304,9 @@ class Numeric t => IntType t where
   intCvtOp :: IntOp n Convert -> Value -> Either NumericError Value
 
 class Numeric t => FloatType t where
+  canonicalNaN :: t
+  isSignNegative :: t -> Bool
+
   fneg :: t -> t
   default fneg :: Num t => t -> t
   fneg = negate
@@ -312,32 +316,37 @@ class Numeric t => FloatType t where
   fabs = abs
 
   fsqrt :: t -> t
-  default fsqrt :: Floating t => t -> t
-  fsqrt = sqrt
+  default fsqrt :: RealFloat t => t -> t
+  fsqrt = canonicalizeNaN . sqrt
 
   fceil :: t -> t
   default fceil :: RealFloat t => t -> t
   fceil a
-    | isNaN a = 0 / 0 -- NaN
-    | otherwise = (fromIntegral :: Integer -> t) (ceiling a)
+    | isNaN a = canonicalNaN
+    | isSignNegative a && a > -1.0 = -0.0
+    | otherwise = fromIntegral (ceiling a :: Integer)
 
   ffloor :: t -> t
   default ffloor :: RealFloat t => t -> t
   ffloor a
-    | isNaN a = 0 / 0 -- NaN
+    | isNaN a = canonicalNaN
+    | a == 0.0 = a -- preserve sign
     | otherwise = fromIntegral (floor a :: Integer)
 
   ftrunc :: t -> t
   default ftrunc :: RealFloat t => t -> t
   ftrunc a
-    | isNaN a = 0 / 0 -- NaN
-    | otherwise = (fromIntegral :: Integer -> t) (truncate a)
+    | isNaN a = canonicalNaN
+    | a == 0.0 = a -- preserve sign
+    | a < 0.0 = fceil a
+    | otherwise = ffloor a
 
   fnearest :: t -> t
   default fnearest :: RealFloat t => t -> t
   fnearest a
-    | isNaN a = 0 / 0 -- NaN
-    | otherwise = (fromIntegral :: Integer -> t) (round a)
+    | isNaN a = canonicalNaN
+    | isSignNegative a && a > -1.0 = -0.0
+    | otherwise = fromIntegral (round a :: Integer)
 
   floatUnOp :: FloatOp n Unary -> t -> t
   floatUnOp op x = case op of
@@ -350,28 +359,24 @@ class Numeric t => FloatType t where
     Nearest -> fnearest x
 
   fadd :: t -> t -> t
-  default fadd :: Num t => t -> t -> t
-  fadd = (+)
+  default fadd :: RealFloat t => t -> t -> t
+  fadd a b = canonicalizeNaN (a + b)
 
   fsub :: t -> t -> t
-  default fsub :: Num t => t -> t -> t
-  fsub = (-)
+  default fsub :: RealFloat t => t -> t -> t
+  fsub a b = canonicalizeNaN (a - b)
 
   fmul :: t -> t -> t
-  default fmul :: Num t => t -> t -> t
-  fmul = (*)
+  default fmul :: RealFloat t => t -> t -> t
+  fmul a b = canonicalizeNaN (a * b)
 
   fdiv :: t -> t -> t
-  default fdiv :: Fractional t => t -> t -> t
-  fdiv = (/)
+  default fdiv :: RealFloat t => t -> t -> t
+  fdiv a b = canonicalizeNaN (a / b)
 
   fmin :: t -> t -> t
-  default fmin :: Ord t => t -> t -> t
-  fmin = min
 
   fmax :: t -> t -> t
-  default fmax :: Ord t => t -> t -> t
-  fmax = max
 
   fcopysign :: t -> t -> t
 
@@ -424,6 +429,11 @@ checkNonNaN :: RealFloat f => f -> Either NumericError ()
 checkNonNaN f
   | isNaN f = Left NumericInvalidConversionToInteger
   | otherwise = Right ()
+
+canonicalizeNaN :: (RealFloat f, FloatType f) => f -> f
+canonicalizeNaN f
+  | isNaN f = canonicalNaN
+  | otherwise = f
 
 i32_wrap_i64 :: Int64 -> Int32
 i32_wrap_i64 = fromIntegral
@@ -625,6 +635,9 @@ instance IntType Word64 where
   ige_s x y = (fromIntegral x :: Int64) >= (fromIntegral y :: Int64)
 
 instance FloatType Float where
+  canonicalNaN = f32CanonicalNaN
+  isSignNegative f = (floatToBits f `shiftR` 31) == 1
+
   floatCvtOp op = case op of
     DemoteF64      -> fmap (toValue . f32_demote_f64) . fromValue 1
     PromoteF32     -> error "PromoteF32 on Float has no meaning"
@@ -638,13 +651,13 @@ instance FloatType Float where
     | a == b = floatFromBits (floatToBits a .|. floatToBits b)
     | a < b = a
     | a > b = b
-    | otherwise = 0 / 0 -- NaN
+    | otherwise = f32CanonicalNaN
 
   fmax a b
-    | a == b = floatFromBits (floatToBits a .|. floatToBits b)
+    | a == b = floatFromBits (floatToBits a .&. floatToBits b)
     | a < b = b
     | a > b = a
-    | otherwise = 0 / 0 -- NaN
+    | otherwise = f32CanonicalNaN
 
   fcopysign f1 f2 =
     let val = floatToBits f1 .&. 0x7FFFFFFF -- bits 0..31
@@ -653,6 +666,9 @@ instance FloatType Float where
         floatFromBits (sign .|. val)
 
 instance FloatType Double where
+  canonicalNaN = f64CanonicalNaN
+  isSignNegative d = (doubleToBits d `shiftR` 63) == 1
+
   floatCvtOp op = case op of
     DemoteF64      -> error "DemoteF64 on Double has no meaning"
     PromoteF32     -> fmap (toValue . f64_promote_f64) . fromValue 1
@@ -666,13 +682,13 @@ instance FloatType Double where
     | a == b = doubleFromBits (doubleToBits a .|. doubleToBits b)
     | a < b = a
     | a > b = b
-    | otherwise = 0 / 0 -- NaN
+    | otherwise = f64CanonicalNaN
 
   fmax a b
-    | a == b = doubleFromBits (doubleToBits a .|. doubleToBits b)
+    | a == b = doubleFromBits (doubleToBits a .&. doubleToBits b)
     | a < b = b
     | a > b = a
-    | otherwise = 0 / 0 -- NaN
+    | otherwise = f64CanonicalNaN
 
   fcopysign f1 f2 =
     let val = doubleToBits f1 .&. 0x7FFFFFFFFFFFFFFF -- bits 0..33

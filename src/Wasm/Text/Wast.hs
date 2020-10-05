@@ -299,19 +299,6 @@ expr = do
 
   invoke = keyword "invoke" *> (Invoke <$> string_ <*> many (expr @_ @m))
 
--- | In GHC 0/0 generates NaN with sign bit set (i.e. negative NaN) which is not
--- the canonical NaN specified in the Wasm spec. This is the canonical NaN.
-f32CanonicalNaN :: Float
-f32CanonicalNaN =
-    -- 0b0_11111111_10000000000000000000000
-    floatFromBits 2143289344
-
--- | Like `f32CanonicalNaN` but for F64.
-f64CanonicalNaN :: Double
-f64CanonicalNaN =
-    -- 0b0_11111111111_1000000000000000000000000000000000000000000000000000
-    doubleFromBits 9221120237041090560
-
 setFloatPayload :: Float -> Integer -> Float
 setFloatPayload f p =
     assert (p >= 1 && p <= ((1 `shiftL` 23) - 1)) $
