@@ -17,6 +17,7 @@ import Data.Bits
 import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
+import GHC.Float
 
 import Wasm.Runtime.Memory
 import Wasm.Syntax.Ops.Float as F
@@ -439,28 +440,60 @@ i32_wrap_i64 :: Int64 -> Int32
 i32_wrap_i64 = fromIntegral
 
 i32_trunc_s_f32 :: Float -> Either NumericError Int32
-i32_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_s_f32 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f < fromIntegral (minBound :: Int32) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i32_trunc_u_f32 :: Float -> Either NumericError Word32
-i32_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_u_f32 f = do
+    checkNonNaN f
+    if f >= (negate (fromIntegral (minBound :: Int32) :: Float)) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i32_trunc_s_f64 :: Double -> Either NumericError Int32
-i32_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f <= (fromIntegral (minBound :: Int32) - 1.0) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i32_trunc_u_f64 :: Double -> Either NumericError Word32
-i32_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
+i32_trunc_u_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i32_trunc_sat_s_f32 :: Float -> Int32
-i32_trunc_sat_s_f32 = truncate
+i32_trunc_sat_s_f32 f
+  | isNaN f = 0
+  | f < fromIntegral (minBound :: Int32) = minBound
+  | f >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate f
 
-i32_trunc_sat_u_f32 :: Float -> Word32
-i32_trunc_sat_u_f32 = truncate
+i32_trunc_sat_u_f32 :: Float -> Int32
+i32_trunc_sat_u_f32 f
+  | isNaN f = 0
+  | f <= -1.0 = 0
+  | f >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = truncate f
 
 i32_trunc_sat_s_f64 :: Double -> Int32
-i32_trunc_sat_s_f64 = truncate
+i32_trunc_sat_s_f64 d
+  | isNaN d = 0
+  | d < fromIntegral (minBound :: Int32) = minBound
+  | d >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate d
 
-i32_trunc_sat_u_f64 :: Double -> Word32
-i32_trunc_sat_u_f64 = truncate
+i32_trunc_sat_u_f64 :: Double -> Int32
+i32_trunc_sat_u_f64 = truncate -- FIXME
 
 i32_reinterpret_f32 :: Float -> Word32
 i32_reinterpret_f32 = floatToBits
@@ -472,28 +505,57 @@ i64_extend_u_i32 :: Word32 -> Word64
 i64_extend_u_i32 = fromIntegral
 
 i64_trunc_s_f32 :: Float -> Either NumericError Int64
-i64_trunc_s_f32 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_s_f32 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64)) || f < fromIntegral (minBound :: Int64) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i64_trunc_u_f32 :: Float -> Either NumericError Word64
-i64_trunc_u_f32 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_u_f32 f = do
+    checkNonNaN f
+    let f' = float2Double f
+    if f' >= negate (fromIntegral (minBound :: Int64)) * 2.0 || f' <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f')
 
 i64_trunc_s_f64 :: Double -> Either NumericError Int64
-i64_trunc_s_f64 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64)) || f < fromIntegral (minBound :: Int64) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i64_trunc_u_f64 :: Double -> Either NumericError Word64
 i64_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
 
 i64_trunc_sat_s_f32 :: Float -> Int64
-i64_trunc_sat_s_f32 = truncate
+i64_trunc_sat_s_f32 f
+  | isNaN f = 0
+  | f < fromIntegral (minBound :: Int64) = minBound
+  | f >= negate (fromIntegral (minBound :: Int64)) = maxBound
+  | otherwise = truncate f
 
-i64_trunc_sat_u_f32 :: Float -> Word64
-i64_trunc_sat_u_f32 = truncate
+i64_trunc_sat_u_f32 :: Float -> Int64
+i64_trunc_sat_u_f32 f
+  | isNaN f = 0
+  | f <= -1.0 = 0
+  | f >= negate (fromIntegral (minBound :: Int64)) * 2.0 = -1
+  | f >= negate (fromIntegral (minBound :: Int64)) = (truncate (f - 9223372036854775808.0)) .|. minBound
+  | otherwise = truncate f
 
 i64_trunc_sat_s_f64 :: Double -> Int64
-i64_trunc_sat_s_f64 = truncate
+i64_trunc_sat_s_f64 d
+  | isNaN d = 0
+  | d < fromIntegral (minBound :: Int64) = minBound
+  | d >= negate (fromIntegral (minBound :: Int64)) = maxBound
+  | otherwise = truncate d
 
-i64_trunc_sat_u_f64 :: Double -> Word64
-i64_trunc_sat_u_f64 = truncate
+i64_trunc_sat_u_f64 :: Double -> Int64
+i64_trunc_sat_u_f64 = truncate -- FIXME
 
 i64_reinterpret_f64 :: Double -> Word64
 i64_reinterpret_f64 = doubleToBits
