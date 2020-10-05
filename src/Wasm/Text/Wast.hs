@@ -11,6 +11,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | This is a parser for Wast scripts, used by the WebAssembly specification.
 
@@ -34,7 +35,7 @@ import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
-import           Data.Bits (clearBit)
+import           Data.Bits ((.|.), (.&.), shiftL, complement)
 import           Data.ByteString.Lazy (ByteString)
 import           Data.ByteString.Lazy.Char8 as Byte (pack)
 import           Data.Char
@@ -236,9 +237,6 @@ expr = do
             ; seq n (return n)
             }
 
-    -- int :: Num a => Parser a
-    -- int = fromIntegral <$> P.integer lexer
-
     negOr_ :: Num a => Parser a -> Parser a
     negOr_ p = do
       neg <- optional (char '-' *> whiteSpace)
@@ -246,19 +244,14 @@ expr = do
       return $ case neg of Just _ -> negate x; Nothing -> x
 
     float32 :: Parser Float
-    float32 = fmap normalizeFloatNaN float
+    float32 = float setFloatPayload f32CanonicalNaN
 
     float64 :: Parser Double
-    float64 = fmap normalizeDoubleNaN float
+    float64 = float setDoublePayload f64CanonicalNaN
 
-    float :: FloatingHexReader a => Parser a
-    float =  try (fromRational . toRational <$> P.float lexer)
-         <|> try (0 / 0
-                   <$ keyword "nan"
-                   <* optional (char ':' *>
-                       (string "0x" *> some (satisfy isHexDigit <|> char '_')
-                       <|> string "canonical"
-                       <|> string "arithmetic")))
+    float :: FloatingHexReader a => (a -> Integer -> a) -> a -> Parser a
+    float set_payload canonical_nan =  try (fromRational . toRational <$> P.float lexer)
+         <|> try (parse_nan set_payload canonical_nan)
          <|> try (1 / 0 <$ keyword "inf")
          <|> try floatingHex
          <|> (fromIntegral <$> int)
@@ -273,22 +266,61 @@ expr = do
         let mres = readHFloat x <|> readHFloat (x ++ "p0")
         maybe mzero pure mres
 
+    -- Both canonical and arithmetic NaNs are parsed to canonical NaN. This is
+    -- more strict than necessary: if a test result is expected to be an
+    -- arithmetic NaN we can accept any of the possible arithmetic NaN values,
+    -- but this is easier to implement, and makes the programs more (according
+    -- to wasmtime, entirely) deterministic.
+    --
+    -- I think ideally we'd return a sum here with alternatives:
+    --
+    -- - AnyNaN -- expect a NaN value with the given sign, payload doesn't matter (`nan` in wast)
+    -- - CanonicalNaN -- expect a canonical NaN (`nan:canonical` in wast)
+    -- - ArithmeticNaN -- accept any arithmetic NaN (`nan:arithmetic` in wast)
+    -- - SpecificNaN -- accept only the given NaN (`nan:0x...` in wast)
+    --
+    -- and then decide how to compare a float result with the expected NaN
+    -- value, but I think that will require significant amount of refactoring,
+    -- so this will do for now.
+    parse_nan :: (a -> Integer -> a) -> a -> Parser a
+    parse_nan set_payload canonical_nan = do
+        keyword "nan"
+        optional (char ':') >>= \case
+          Nothing ->
+            pure canonical_nan
+          Just _ ->
+            ((string "canonical" <|> string "arithmetic") >> pure canonical_nan) <|>
+            (string "0x" >> hex_payload >>= pure . set_payload canonical_nan)
+
+    hex_payload :: Parser Integer
+    hex_payload = number 16 hexDigit
+
     go k f p = try $ keyword k *> (Constant . f <$> p)
 
   invoke = keyword "invoke" *> (Invoke <$> string_ <*> many (expr @_ @m))
 
--- | In GHC, 0/0 produces a negative NaN instead of positive, so to parse "nan"
--- to positive NaN and "-nan" to negative we normalize parsed values of "nan".
-normalizeFloatNaN :: Float -> Float
-normalizeFloatNaN f
-  | isNaN f = floatFromBits (clearBit (floatToBits f) 31)
-  | otherwise = f
+-- | In GHC 0/0 generates NaN with sign bit set (i.e. negative NaN) which is not
+-- the canonical NaN specified in the Wasm spec. This is the canonical NaN.
+f32CanonicalNaN :: Float
+f32CanonicalNaN =
+    -- 0b0_11111111_10000000000000000000000
+    floatFromBits 2143289344
 
--- | `normalizeFloatNaN`, but for doubles.
-normalizeDoubleNaN :: Double -> Double
-normalizeDoubleNaN d
-  | isNaN d = doubleFromBits (clearBit (doubleToBits d) 63)
-  | otherwise = d
+-- | Like `f32CanonicalNaN` but for F64.
+f64CanonicalNaN :: Double
+f64CanonicalNaN =
+    -- 0b0_11111111111_1000000000000000000000000000000000000000000000000000
+    doubleFromBits 9221120237041090560
+
+setFloatPayload :: Float -> Integer -> Float
+setFloatPayload f p =
+    assert (p >= 1 && p <= ((1 `shiftL` 23) - 1)) $
+    floatFromBits ((floatToBits f .&. complement ((1 `shiftL` 23) - 1)) .|. fromIntegral p)
+
+setDoublePayload :: Double -> Integer -> Double
+setDoublePayload d p =
+    assert (p >= 1 && p <= ((1 `shiftL` 52) - 1)) $
+    doubleFromBits ((doubleToBits d .&. complement ((1 `shiftL` 52) - 1)) .|. fromIntegral p)
 
 cmd :: forall w m. WasmEngine w m => Parser (Cmd w)
 cmd = do
@@ -348,16 +380,11 @@ literal = do
                _ <- char '}'
                pure x)
 
-  hexdigit = inRange '0' '9' <|> inRange 'a' 'f' <|> inRange 'A' 'F'
-
   hexnum = do
     h <- hexdigit
     s <- many (optional (char '_') *> hexdigit)
     let n = read ('0':'x':h:s) :: Int
     pure $ chr n
-
-  inRange :: Char -> Char -> Parser Char
-  inRange x y = satisfy (\c -> x <= c && c <= y)
 
   utf8cont :: Parser Char
   utf8cont = inRange '\x80' '\xbf'
@@ -376,6 +403,13 @@ literal = do
           <$> char '\xf4' <*> inRange '\x80' '\x8f' <*> utf8cont <*> utf8cont
     <|> (\x y z w -> [x, y, z, w])
           <$> inRange '\xf1' '\xf3' <*> utf8cont <*> utf8cont <*> utf8cont
+
+
+inRange :: Char -> Char -> Parser Char
+inRange x y = satisfy (\c -> x <= c && c <= y)
+
+hexdigit :: Parser Char
+hexdigit = inRange '0' '9' <|> inRange 'a' 'f' <|> inRange 'A' 'F'
 
 module_ :: Parser ModuleDecl
 module_ = do
@@ -414,7 +448,7 @@ string_ = literal <* whiteSpace
 assertion :: forall w m. WasmEngine w m => Parser (Assertion w)
 assertion = do
   _ <- char '(' *> whiteSpace
-  x <-   go "return"                (AssertReturn <$> action @_ @m <*> many (expr @_ @m))
+  x <-  go "return"                (AssertReturn <$> action @_ @m <*> many (expr @_ @m))
     <|> go "return_canonical_nan"  (AssertReturnCanonicalNan <$> action @_ @m)
     <|> go "return_arithmetic_nan" (AssertReturnArithmeticNan <$> action @_ @m)
     <|> go "trap"                  (AssertTrap <$> action @_ @m <*> failure)
