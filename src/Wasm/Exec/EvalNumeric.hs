@@ -575,7 +575,7 @@ i64_reinterpret_f64 :: Double -> Word64
 i64_reinterpret_f64 = doubleToBits
 
 f32_demote_f64 :: Double -> Float
-f32_demote_f64 = fromRational . toRational
+f32_demote_f64 = canonicalizeNaN . double2Float
 
 f32_convert_s_i32 :: Int32 -> Float
 f32_convert_s_i32 = fromIntegral
@@ -606,8 +606,8 @@ f32_convert_u_i64 i
 f32_reinterpret_i32 :: Word32 -> Float
 f32_reinterpret_i32 = floatFromBits
 
-f64_promote_f64 :: Float -> Double
-f64_promote_f64 = fromRational . toRational
+f64_promote_f32 :: Float -> Double
+f64_promote_f32 = canonicalizeNaN . float2Double
 
 f64_convert_s_i32 :: Int32 -> Double
 f64_convert_s_i32 = fromIntegral
@@ -765,7 +765,7 @@ instance FloatType Double where
 
   floatCvtOp op = case op of
     DemoteF64      -> error "DemoteF64 on Double has no meaning"
-    PromoteF32     -> fmap (toValue . f64_promote_f64) . fromValue 1
+    PromoteF32     -> fmap (toValue . f64_promote_f32) . fromValue 1
     ConvertSI32    -> fmap (toValue . f64_convert_s_i32) . fromValue 1
     ConvertUI32    -> fmap (toValue . f64_convert_u_i32) . fromValue 1
     ConvertSI64    -> fmap (toValue . f64_convert_s_i64) . fromValue 1

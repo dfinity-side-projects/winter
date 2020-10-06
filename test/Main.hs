@@ -26,7 +26,6 @@ main = do
             && "names.wast" /= file
               -- We need more accurate floating-point support.
             && "float_exprs.wast" /= file
-            && "conversions.wast" /= file
         ]
 
   defaultMain $ testGroup "main"
