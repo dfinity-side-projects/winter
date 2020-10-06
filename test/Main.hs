@@ -24,14 +24,6 @@ main = do
               -- We aren't going to bother fully supporting
               -- Unicode function names in the reference interpreter yet.
             && "names.wast" /= file
-              -- We need more accurate floating-point support.
-            && "f32.wast" /= file
-            && "f64.wast" /= file
-            && "f32_bitwise.wast" /= file
-            && "f64_bitwise.wast" /= file
-            && "float_literals.wast" /= file
-            && "float_exprs.wast" /= file
-            && "conversions.wast" /= file
         ]
 
   defaultMain $ testGroup "main"

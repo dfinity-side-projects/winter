@@ -20,7 +20,7 @@ data GlobalInst m = GlobalInst
   }
 
 instance Show (GlobalInst m) where
-  showsPrec _d GlobalInst {..} = showString "GlobalInst"
+  showsPrec _d GlobalInst {} = showString "GlobalInst"
 
 makeLenses ''GlobalInst
 

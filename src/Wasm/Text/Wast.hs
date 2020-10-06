@@ -11,6 +11,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | This is a parser for Wast scripts, used by the WebAssembly specification.
 
@@ -34,6 +35,7 @@ import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
 import           Data.Bifunctor
+import           Data.Bits ((.|.), (.&.), shiftL, complement)
 import           Data.ByteString.Lazy (ByteString)
 import           Data.ByteString.Lazy.Char8 as Byte (pack)
 import           Data.Char
@@ -54,6 +56,8 @@ import           Text.Parsec.Language (haskellDef)
 import           Text.Parsec.String
 import qualified Text.Parsec.Token as P
 
+import           Wasm.Util.Float
+
 {-
 import           Wasm.Binary.Decode
 import           Wasm.Exec.Eval hiding (Invoke, invoke, elem)
@@ -66,7 +70,7 @@ import           Wasm.Util.Source
 
 -- import           Debug.Trace
 
-class (Show (Value w), Eq (Value w)) => WasmEngine w m where
+class Show (Value w) => WasmEngine w m where
   type Value w :: *
   type Module w :: *
   type ModuleInst w m :: *
@@ -199,19 +203,21 @@ expr = do
   return x
  where
   constant =  go "i32.const" (const_i32 @w @m) (fromIntegral <$> negOr_ int)
-          <|> go "f32.const" (const_f32 @w @m) (negOr_ float)
-          <|> go "i64.const" (const_i64 @w @m) (negOr_ int)
-          <|> go "f64.const" (const_f64 @w @m) (negOr_ float)
+          <|> go "f32.const" (const_f32 @w @m) (negOr_ float32)
+          <|> go "i64.const" (const_i64 @w @m) (fromIntegral <$> negOr_ int)
+          <|> go "f64.const" (const_f64 @w @m) (negOr_ float64)
    where
+    int :: Parser Integer
     int         = do{ f <- P.lexeme lexer sign
                     ; n <- nat
-                    ; return (f (fromIntegral n))
+                    ; return (f n)
                     }
 
     sign        =   (char '-' >> return negate)
                 <|> (char '+' >> return id)
                 <|> return id
 
+    nat :: Parser Integer
     nat         = zeroNumber <|> decimal
 
     zeroNumber  = do{ _ <- char '0'
@@ -233,23 +239,21 @@ expr = do
             ; seq n (return n)
             }
 
-    -- int :: Num a => Parser a
-    -- int = fromIntegral <$> P.integer lexer
-
     negOr_ :: Num a => Parser a -> Parser a
     negOr_ p = do
       neg <- optional (char '-' *> whiteSpace)
       x <- p
-      return $ case neg of Just _ -> -x; Nothing -> x
+      return $ case neg of Just _ -> negate x; Nothing -> x
 
-    float :: FloatingHexReader a => Parser a
-    float =  try (fromRational . toRational <$> P.float lexer)
-         <|> try (0 / 0
-                   <$ keyword "nan"
-                   <* optional (char ':' *>
-                       (string "0x" *> some (satisfy isHexDigit <|> char '_')
-                       <|> string "canonical"
-                       <|> string "arithmetic")))
+    float32 :: Parser Float
+    float32 = float setFloatPayload f32CanonicalNaN
+
+    float64 :: Parser Double
+    float64 = float setDoublePayload f64CanonicalNaN
+
+    float :: FloatingHexReader a => (a -> Integer -> a) -> a -> Parser a
+    float set_payload canonical_nan =  try (fromRational . toRational <$> P.float lexer)
+         <|> try (parse_nan set_payload canonical_nan)
          <|> try (1 / 0 <$ keyword "inf")
          <|> try floatingHex
          <|> (fromIntegral <$> int)
@@ -264,9 +268,48 @@ expr = do
         let mres = readHFloat x <|> readHFloat (x ++ "p0")
         maybe mzero pure mres
 
+    -- Both canonical and arithmetic NaNs are parsed to canonical NaN. This is
+    -- more strict than necessary: if a test result is expected to be an
+    -- arithmetic NaN we can accept any of the possible arithmetic NaN values,
+    -- but this is easier to implement, and makes the programs more (according
+    -- to wasmtime, entirely) deterministic.
+    --
+    -- I think ideally we'd return a sum here with alternatives:
+    --
+    -- - AnyNaN -- expect a NaN value with the given sign, payload doesn't matter (`nan` in wast)
+    -- - CanonicalNaN -- expect a canonical NaN (`nan:canonical` in wast)
+    -- - ArithmeticNaN -- accept any arithmetic NaN (`nan:arithmetic` in wast)
+    -- - SpecificNaN -- accept only the given NaN (`nan:0x...` in wast)
+    --
+    -- and then decide how to compare a float result with the expected NaN
+    -- value, but I think that will require significant amount of refactoring,
+    -- so this will do for now.
+    parse_nan :: (a -> Integer -> a) -> a -> Parser a
+    parse_nan set_payload canonical_nan = do
+        keyword "nan"
+        optional (char ':') >>= \case
+          Nothing ->
+            pure canonical_nan
+          Just _ ->
+            ((string "canonical" <|> string "arithmetic") >> pure canonical_nan) <|>
+            (string "0x" >> hex_payload >>= pure . set_payload canonical_nan)
+
+    hex_payload :: Parser Integer
+    hex_payload = number 16 hexDigit
+
     go k f p = try $ keyword k *> (Constant . f <$> p)
 
   invoke = keyword "invoke" *> (Invoke <$> string_ <*> many (expr @_ @m))
+
+setFloatPayload :: Float -> Integer -> Float
+setFloatPayload f p =
+    assert (p >= 1 && p <= ((1 `shiftL` 23) - 1)) $
+    floatFromBits ((floatToBits f .&. complement ((1 `shiftL` 23) - 1)) .|. fromIntegral p)
+
+setDoublePayload :: Double -> Integer -> Double
+setDoublePayload d p =
+    assert (p >= 1 && p <= ((1 `shiftL` 52) - 1)) $
+    doubleFromBits ((doubleToBits d .&. complement ((1 `shiftL` 52) - 1)) .|. fromIntegral p)
 
 cmd :: forall w m. WasmEngine w m => Parser (Cmd w)
 cmd = do
@@ -326,16 +369,11 @@ literal = do
                _ <- char '}'
                pure x)
 
-  hexdigit = inRange '0' '9' <|> inRange 'a' 'f' <|> inRange 'A' 'F'
-
   hexnum = do
     h <- hexdigit
     s <- many (optional (char '_') *> hexdigit)
     let n = read ('0':'x':h:s) :: Int
     pure $ chr n
-
-  inRange :: Char -> Char -> Parser Char
-  inRange x y = satisfy (\c -> x <= c && c <= y)
 
   utf8cont :: Parser Char
   utf8cont = inRange '\x80' '\xbf'
@@ -354,6 +392,13 @@ literal = do
           <$> char '\xf4' <*> inRange '\x80' '\x8f' <*> utf8cont <*> utf8cont
     <|> (\x y z w -> [x, y, z, w])
           <$> inRange '\xf1' '\xf3' <*> utf8cont <*> utf8cont <*> utf8cont
+
+
+inRange :: Char -> Char -> Parser Char
+inRange x y = satisfy (\c -> x <= c && c <= y)
+
+hexdigit :: Parser Char
+hexdigit = inRange '0' '9' <|> inRange 'a' 'f' <|> inRange 'A' 'F'
 
 module_ :: Parser ModuleDecl
 module_ = do
@@ -392,7 +437,7 @@ string_ = literal <* whiteSpace
 assertion :: forall w m. WasmEngine w m => Parser (Assertion w)
 assertion = do
   _ <- char '(' *> whiteSpace
-  x <-   go "return"                (AssertReturn <$> action @_ @m <*> many (expr @_ @m))
+  x <-  go "return"                (AssertReturn <$> action @_ @m <*> many (expr @_ @m))
     <|> go "return_canonical_nan"  (AssertReturnCanonicalNan <$> action @_ @m)
     <|> go "return_arithmetic_nan" (AssertReturnArithmeticNan <$> action @_ @m)
     <|> go "trap"                  (AssertTrap <$> action @_ @m <*> failure)
@@ -503,41 +548,6 @@ invokeModule readModule decl k = do
 -- These tests currently do not work.
 ignoredFunctions :: [String]
 ignoredFunctions = [
-  -- float_misc.wast
-  "f32.abs",
-  "f64.abs",
-  "f32.neg",
-  "f64.neg",
-  "f32.copysign",
-  "f64.copysign",
-  "f64.nearest",
-  "f64.sqrt",
-
-  -- float_memory.wast
-  "f32.load",
-  "f64.load",
-
-  -- local_tee.wast
-  "as-unary-operand",
-
-  -- select.wast
-  "select_f32",
-  "select_f64",
-
-  -- address.wast
-  "32_good5",
-  "64_good5",
-
-  -- traps.wast
-  "no_dce.i32.trunc_f32_s",
-  "no_dce.i32.trunc_f32_u",
-  "no_dce.i32.trunc_f64_s",
-  "no_dce.i32.trunc_f64_u",
-  "no_dce.i64.trunc_f32_s",
-  "no_dce.i64.trunc_f32_u",
-  "no_dce.i64.trunc_f64_s",
-  "no_dce.i64.trunc_f64_u",
-
   -- linking.wast
   "get table[0]"
   ]
@@ -550,11 +560,11 @@ parseWastFile
   -> IntMap (ModuleInst w m)
   -> (String -> m ByteString)                       -- convert module into Wasm binary
   -> (String -> m ())                               -- names a step
-  -> (forall a. (Eq a, Show a) => String -> a -> a -> m ()) -- establishes an assertion
+  -> ([Value w] -> [Value w] -> Bool)
   -> (String -> m ())                               -- a negative assertion
   -> m ()
-parseWastFile path input preNames preMods readModule step assertEqual assertFailure =
-  case runP (script @_ @m) () path input of
+parseWastFile path input preNames preMods readModule step valEq assertFailure =
+  case runP (script @w @m) () path input of
     Left err -> fail $ show err
     Right wast -> flip evalStateT (newCheckState preNames preMods) $
       forM_ wast $ \(l,c) -> lift (step ("line " ++ show l)) >> case c of
@@ -571,9 +581,13 @@ parseWastFile path input preNames preMods readModule step assertEqual assertFail
 
           AssertReturn a exps -> do
             let exps' = exps^..traverse._Constant
-            invokeAction a $ \eres ->
-              lift $ assertEqual (prettyAction @w @m a ++ " == " ++ show exps')
-                (Right exps') (fmap fst eres)
+            invokeAction a $ lift . \case
+              Left err -> assertFailure $ "assert_return failed: " ++ err
+              Right (vals, _mod) ->
+                unless (valEq vals exps') $ assertFailure $
+                  prettyAction @w @m a ++ " == " ++ show exps' ++ "\n" ++
+                  "expected: " ++ show exps' ++ "\n" ++
+                  " but got: " ++ show vals
 
           AssertTrap a msg ->
             invokeAction a $ \case

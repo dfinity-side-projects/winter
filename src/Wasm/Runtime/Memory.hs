@@ -30,15 +30,12 @@ import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Primitive
-import           Data.Array.ST (newArray, readArray, MArray, STUArray)
-import           Data.Array.Unsafe (castSTUArray)
 import           Data.Int
 import           Data.Primitive.MutVar
 import           Data.Primitive.ByteArray
 import qualified Data.Primitive.ByteArray.Unaligned    as UABA
 import qualified Data.Primitive.ByteArray.LittleEndian as LEBA
 import           Data.Word
-import           GHC.ST (runST, ST)
 import           Lens.Micro.Platform
 import           Data.ByteString.Lazy (ByteString)
 import qualified Data.ByteString.Lazy as BS
@@ -48,6 +45,7 @@ import           Wasm.Syntax.Memory
 import           Wasm.Syntax.Types
 import           Wasm.Syntax.Values (Value)
 import qualified Wasm.Syntax.Values as Values
+import           Wasm.Util.Float
 
 data MemoryInst m = MemoryInst
   { _miContent :: MutVar (PrimState m) (MutableByteArray (PrimState m))
@@ -55,7 +53,7 @@ data MemoryInst m = MemoryInst
   }
 
 instance Show (MemoryInst m) where
-  showsPrec _d MemoryInst {..} = showString "MemoryInst"
+  showsPrec _d MemoryInst {} = showString "MemoryInst"
 
 makeLenses ''MemoryInst
 
@@ -267,22 +265,3 @@ importMemory mem bs = do
     let !(SBS ba) = toShort (BS.toStrict bs)
     copyByteArray m' 0 (ByteArray ba) 0 (fromIntegral (BS.length bs))
     writeMutVar (mem^.miContent) m'
-
--- Conversions used in "Wasm.Exec.EvalNumeric"
-
-cast :: (MArray (STUArray s) a (ST s), MArray (STUArray s) b (ST s))
-     => a -> ST s b
-cast x = newArray (0 :: Int, 0) x >>= castSTUArray >>= flip readArray 0
-{-# INLINE cast #-}
-
-floatToBits :: Float -> Int32
-floatToBits x = runST (cast x)
-
-floatFromBits :: Int32 -> Float
-floatFromBits x = runST (cast x)
-
-doubleToBits :: Double -> Int64
-doubleToBits x = runST (cast x)
-
-doubleFromBits :: Int64 -> Double
-doubleFromBits x = runST (cast x)

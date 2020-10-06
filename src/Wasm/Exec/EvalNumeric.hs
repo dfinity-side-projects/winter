@@ -17,6 +17,7 @@ import Data.Bits
 import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
+import GHC.Float
 
 import Wasm.Runtime.Memory
 import Wasm.Syntax.Ops.Float as F
@@ -24,6 +25,7 @@ import Wasm.Syntax.Ops.Int as I
 import Wasm.Syntax.Ops.Kind
 import Wasm.Syntax.Types
 import Wasm.Syntax.Values
+import Wasm.Util.Float
 
 {- Runtime type errors -}
 
@@ -31,7 +33,8 @@ data NumericError
   = NumericTypeError Int Value ValueType
   | NumericIntegerDivideByZero
   | NumericIntegerOverflow
-  deriving (Show, Eq)
+  | NumericInvalidConversionToInteger
+  deriving (Show)
 
 class Numeric t where
   type OpType t :: * -> *
@@ -302,6 +305,9 @@ class Numeric t => IntType t where
   intCvtOp :: IntOp n Convert -> Value -> Either NumericError Value
 
 class Numeric t => FloatType t where
+  canonicalNaN :: t
+  isSignNegative :: t -> Bool
+
   fneg :: t -> t
   default fneg :: Num t => t -> t
   fneg = negate
@@ -311,24 +317,37 @@ class Numeric t => FloatType t where
   fabs = abs
 
   fsqrt :: t -> t
-  default fsqrt :: Floating t => t -> t
-  fsqrt = sqrt
+  default fsqrt :: RealFloat t => t -> t
+  fsqrt = canonicalizeNaN . sqrt
 
   fceil :: t -> t
-  default fceil :: RealFrac t => t -> t
-  fceil = (fromIntegral :: Integer -> t) . ceiling
+  default fceil :: RealFloat t => t -> t
+  fceil a
+    | isNaN a = canonicalNaN
+    | isSignNegative a && a > -1.0 = -0.0
+    | otherwise = fromIntegral (ceiling a :: Integer)
 
   ffloor :: t -> t
-  default ffloor :: RealFrac t => t -> t
-  ffloor = (fromIntegral :: Integer -> t) . floor
+  default ffloor :: RealFloat t => t -> t
+  ffloor a
+    | isNaN a = canonicalNaN
+    | a == 0.0 = a -- preserve sign
+    | otherwise = fromIntegral (floor a :: Integer)
 
   ftrunc :: t -> t
-  default ftrunc :: RealFrac t => t -> t
-  ftrunc = (fromIntegral :: Integer -> t) . truncate
+  default ftrunc :: RealFloat t => t -> t
+  ftrunc a
+    | isNaN a = canonicalNaN
+    | a == 0.0 = a -- preserve sign
+    | a < 0.0 = fceil a
+    | otherwise = ffloor a
 
   fnearest :: t -> t
-  default fnearest :: RealFrac t => t -> t
-  fnearest = (fromIntegral :: Integer -> t) . round
+  default fnearest :: RealFloat t => t -> t
+  fnearest a
+    | isNaN a = canonicalNaN
+    | isSignNegative a && a > -1.0 = -0.0
+    | otherwise = fromIntegral (round a :: Integer)
 
   floatUnOp :: FloatOp n Unary -> t -> t
   floatUnOp op x = case op of
@@ -341,32 +360,26 @@ class Numeric t => FloatType t where
     Nearest -> fnearest x
 
   fadd :: t -> t -> t
-  default fadd :: Num t => t -> t -> t
-  fadd = (+)
+  default fadd :: RealFloat t => t -> t -> t
+  fadd a b = canonicalizeNaN (a + b)
 
   fsub :: t -> t -> t
-  default fsub :: Num t => t -> t -> t
-  fsub = (-)
+  default fsub :: RealFloat t => t -> t -> t
+  fsub a b = canonicalizeNaN (a - b)
 
   fmul :: t -> t -> t
-  default fmul :: Num t => t -> t -> t
-  fmul = (*)
+  default fmul :: RealFloat t => t -> t -> t
+  fmul a b = canonicalizeNaN (a * b)
 
   fdiv :: t -> t -> t
-  default fdiv :: Fractional t => t -> t -> t
-  fdiv = (/)
+  default fdiv :: RealFloat t => t -> t -> t
+  fdiv a b = canonicalizeNaN (a / b)
 
   fmin :: t -> t -> t
-  default fmin :: Ord t => t -> t -> t
-  fmin = min
 
   fmax :: t -> t -> t
-  default fmax :: Ord t => t -> t -> t
-  fmax = max
 
   fcopysign :: t -> t -> t
-  default fcopysign :: (Ord t, Num t) => t -> t -> t
-  fcopysign = \x y -> if x < 0 then - (abs y) else abs y
 
   floatBinOp :: FloatOp n Binary -> t -> t -> Either NumericError t
   floatBinOp op x y = case op of
@@ -413,34 +426,80 @@ class Numeric t => FloatType t where
 
   floatCvtOp :: FloatOp n Convert -> Value -> Either NumericError Value
 
+checkNonNaN :: RealFloat f => f -> Either NumericError ()
+checkNonNaN f
+  | isNaN f = Left NumericInvalidConversionToInteger
+  | otherwise = Right ()
+
+canonicalizeNaN :: (RealFloat f, FloatType f) => f -> f
+canonicalizeNaN f
+  | isNaN f = canonicalNaN
+  | otherwise = f
+
 i32_wrap_i64 :: Int64 -> Int32
 i32_wrap_i64 = fromIntegral
 
-i32_trunc_s_f32 :: Float -> Int32
-i32_trunc_s_f32 = truncate
+i32_trunc_s_f32 :: Float -> Either NumericError Int32
+i32_trunc_s_f32 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f < fromIntegral (minBound :: Int32) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
-i32_trunc_u_f32 :: Float -> Word32
-i32_trunc_u_f32 = truncate
+i32_trunc_u_f32 :: Float -> Either NumericError Word32
+i32_trunc_u_f32 f = do
+    checkNonNaN f
+    if f >= (negate (fromIntegral (minBound :: Int32) :: Float)) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
-i32_trunc_s_f64 :: Double -> Int32
-i32_trunc_s_f64 = truncate
+i32_trunc_s_f64 :: Double -> Either NumericError Int32
+i32_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) || f <= (fromIntegral (minBound :: Int32) - 1.0) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
-i32_trunc_u_f64 :: Double -> Word32
-i32_trunc_u_f64 = truncate
+i32_trunc_u_f64 :: Double -> Either NumericError Word32
+i32_trunc_u_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int32)) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i32_trunc_sat_s_f32 :: Float -> Int32
-i32_trunc_sat_s_f32 = truncate
+i32_trunc_sat_s_f32 f
+  | isNaN f = 0
+  | f < fromIntegral (minBound :: Int32) = minBound
+  | f >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate f
 
-i32_trunc_sat_u_f32 :: Float -> Word32
-i32_trunc_sat_u_f32 = truncate
+i32_trunc_sat_u_f32 :: Float -> Int32
+i32_trunc_sat_u_f32 f
+  | isNaN f = 0
+  | f <= -1.0 = 0
+  | f >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = truncate f
 
 i32_trunc_sat_s_f64 :: Double -> Int32
-i32_trunc_sat_s_f64 = truncate
+i32_trunc_sat_s_f64 d
+  | isNaN d = 0
+  | d < fromIntegral (minBound :: Int32) = minBound
+  | d >= negate (fromIntegral (minBound :: Int32)) = maxBound
+  | otherwise = truncate d
 
-i32_trunc_sat_u_f64 :: Double -> Word32
-i32_trunc_sat_u_f64 = truncate
+i32_trunc_sat_u_f64 :: Double -> Int32
+i32_trunc_sat_u_f64 d
+  | isNaN d = 0
+  | d <= -1.0 = 0
+  | d >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = truncate d
 
-i32_reinterpret_f32 :: Float -> Int32
+i32_reinterpret_f32 :: Float -> Word32
 i32_reinterpret_f32 = floatToBits
 
 i64_extend_s_i32 :: Int32 -> Int64
@@ -449,35 +508,74 @@ i64_extend_s_i32 = fromIntegral
 i64_extend_u_i32 :: Word32 -> Word64
 i64_extend_u_i32 = fromIntegral
 
-i64_trunc_s_f32 :: Float -> Int64
-i64_trunc_s_f32 = truncate
+i64_trunc_s_f32 :: Float -> Either NumericError Int64
+i64_trunc_s_f32 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64)) || f < fromIntegral (minBound :: Int64) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
-i64_trunc_u_f32 :: Float -> Word64
-i64_trunc_u_f32 = truncate
+i64_trunc_u_f32 :: Float -> Either NumericError Word64
+i64_trunc_u_f32 f = do
+    checkNonNaN f
+    let f' = float2Double f
+    if f' >= negate (fromIntegral (minBound :: Int64)) * 2.0 || f' <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f')
 
-i64_trunc_s_f64 :: Double -> Int64
-i64_trunc_s_f64 = truncate
+i64_trunc_s_f64 :: Double -> Either NumericError Int64
+i64_trunc_s_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64)) || f < fromIntegral (minBound :: Int64) then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
-i64_trunc_u_f64 :: Double -> Word64
-i64_trunc_u_f64 = truncate
+i64_trunc_u_f64 :: Double -> Either NumericError Word64
+i64_trunc_u_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64) :: Double) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i64_trunc_sat_s_f32 :: Float -> Int64
-i64_trunc_sat_s_f32 = truncate
+i64_trunc_sat_s_f32 f
+  | isNaN f = 0
+  | f < fromIntegral (minBound :: Int64) = minBound
+  | f >= negate (fromIntegral (minBound :: Int64)) = maxBound
+  | otherwise = truncate f
 
-i64_trunc_sat_u_f32 :: Float -> Word64
-i64_trunc_sat_u_f32 = truncate
+i64_trunc_sat_u_f32 :: Float -> Int64
+i64_trunc_sat_u_f32 f
+  | isNaN f = 0
+  | f <= -1.0 = 0
+  | f >= negate (fromIntegral (minBound :: Int64)) * 2.0 = -1
+  | f >= negate (fromIntegral (minBound :: Int64)) = round (f - 9223372036854775808.0) .|. minBound
+  | otherwise = truncate f
 
 i64_trunc_sat_s_f64 :: Double -> Int64
-i64_trunc_sat_s_f64 = truncate
+i64_trunc_sat_s_f64 d
+  | isNaN d = 0
+  | d < fromIntegral (minBound :: Int64) = minBound
+  | d >= negate (fromIntegral (minBound :: Int64)) = maxBound
+  | otherwise = truncate d
 
-i64_trunc_sat_u_f64 :: Double -> Word64
-i64_trunc_sat_u_f64 = truncate
+i64_trunc_sat_u_f64 :: Double -> Int64
+i64_trunc_sat_u_f64 d
+  | isNaN d = 0
+  | d <= -1.0 = 0
+  | d >= negate (fromIntegral (minBound :: Int64)) * 2.0 = -1
+  | d >= negate (fromIntegral (minBound :: Int64)) = round (d - 9223372036854775808.0) .|. minBound
+  | otherwise = truncate d
 
-i64_reinterpret_f64 :: Double -> Int64
+i64_reinterpret_f64 :: Double -> Word64
 i64_reinterpret_f64 = doubleToBits
 
 f32_demote_f64 :: Double -> Float
-f32_demote_f64 = fromRational . toRational
+f32_demote_f64 = canonicalizeNaN . double2Float
 
 f32_convert_s_i32 :: Int32 -> Float
 f32_convert_s_i32 = fromIntegral
@@ -486,16 +584,30 @@ f32_convert_u_i32 :: Word32 -> Float
 f32_convert_u_i32 = fromIntegral
 
 f32_convert_s_i64 :: Int64 -> Float
-f32_convert_s_i64 = fromIntegral
+f32_convert_s_i64 i
+  | i /= minBound && abs i < 0x10000000000000 = fromIntegral i
+  | otherwise =
+    let
+      r | i .&. 0xfff == 0 = 0
+        | otherwise = 1
+    in
+      fromIntegral ((i `shiftR` 12) .|. r) * (2 ** 12)
 
 f32_convert_u_i64 :: Word64 -> Float
-f32_convert_u_i64 = fromIntegral
+f32_convert_u_i64 i
+  | i < 0x10000000000000 = fromIntegral i
+  | otherwise =
+    let
+      r | i .&. 0xfff == 0 = 0
+        | otherwise = 1
+    in
+      fromIntegral ((i `shiftR` 12) .|. r) * (2 ** 12)
 
-f32_reinterpret_i32 :: Int32 -> Float
+f32_reinterpret_i32 :: Word32 -> Float
 f32_reinterpret_i32 = floatFromBits
 
-f64_promote_f64 :: Float -> Double
-f64_promote_f64 = fromRational . toRational
+f64_promote_f32 :: Float -> Double
+f64_promote_f32 = canonicalizeNaN . float2Double
 
 f64_convert_s_i32 :: Int32 -> Double
 f64_convert_s_i32 = fromIntegral
@@ -506,26 +618,30 @@ f64_convert_u_i32 = fromIntegral
 f64_convert_s_i64 :: Int64 -> Double
 f64_convert_s_i64 = fromIntegral
 
-f64_convert_u_i64 :: Word64 -> Double
-f64_convert_u_i64 = fromIntegral
+f64_convert_u_i64 :: Int64 -> Double
+f64_convert_u_i64 i
+  | i >= 0 = fromIntegral i
+  | otherwise =
+    let i' = fromIntegral i :: Word64
+     in fromIntegral ((i' `shiftR` 1) .|. (i' .&. 1)) * 2.0
 
-f64_reinterpret_i64 :: Int64 -> Double
+f64_reinterpret_i64 :: Word64 -> Double
 f64_reinterpret_i64 = doubleFromBits
 
 instance IntType Int32 where
-  intCvtOp op = case op of
-    WrapI64          -> fmap (toValue . i32_wrap_i64) . fromValue 1
+  intCvtOp op x = case op of
+    WrapI64          -> fmap (toValue . i32_wrap_i64) (fromValue 1 x)
     ExtendSI32       -> error "ExtendSI32 on Int32 has no meaning"
     ExtendUI32       -> error "ExtendUI32 on Int32 has no meaning"
-    TruncSF32        -> fmap (toValue . i32_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f64)
+    TruncSSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f32)
+    TruncUSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f32)
+    TruncSSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f64)
+    TruncUSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f64)
+    ReinterpretFloat -> fmap toValue (fromValue 1 x >>= return . i32_reinterpret_f32)
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word32) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word32) . fromIntegral
@@ -538,19 +654,19 @@ instance IntType Int32 where
   ige_u x y = (fromIntegral x :: Word32) >= (fromIntegral y :: Word32)
 
 instance IntType Word32 where
-  intCvtOp op = case op of
-    WrapI64          -> fmap (toValue . i32_wrap_i64) . fromValue 1
+  intCvtOp op x = case op of
+    WrapI64          -> fmap toValue (fromValue 1 x >>= return . i32_wrap_i64)
     ExtendSI32       -> error "ExtendSI32 on Word32 has no meaning"
     ExtendUI32       -> error "ExtendSI32 on Word32 has no meaning"
-    TruncSF32        -> fmap (toValue . i32_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i32_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i32_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i32_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i32_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i32_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i32_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i32_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i32_reinterpret_f32) . fromValue 1
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i32_trunc_u_f64)
+    TruncSSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f32)
+    TruncUSatF32     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f32)
+    TruncSSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_s_f64)
+    TruncUSatF64     -> fmap toValue (fromValue 1 x >>= return . i32_trunc_sat_u_f64)
+    ReinterpretFloat -> fmap toValue (fromValue 1 x >>= return . i32_reinterpret_f32)
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int32) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int32) . fromIntegral
@@ -563,19 +679,19 @@ instance IntType Word32 where
   ige_s x y = (fromIntegral x :: Int32) >= (fromIntegral y :: Int32)
 
 instance IntType Int64 where
-  intCvtOp op = case op of
+  intCvtOp op x = case op of
     WrapI64          -> error "WrapI64 on Int64 has no meaning"
-    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) . fromValue 1
-    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) . fromValue 1
-    TruncSF32        -> fmap (toValue . i64_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
+    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) (fromValue 1 x)
+    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) (fromValue 1 x)
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f64)
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) (fromValue 1 x)
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) (fromValue 1 x)
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) (fromValue 1 x)
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) (fromValue 1 x)
+    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) (fromValue 1 x)
 
   idiv_u = checkDiv0 $ \x -> fromIntegral . quot   (fromIntegral x :: Word64) . fromIntegral
   irem_u = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Word64) . fromIntegral
@@ -588,19 +704,19 @@ instance IntType Int64 where
   ige_u x y = (fromIntegral x :: Word64) >= (fromIntegral y :: Word64)
 
 instance IntType Word64 where
-  intCvtOp op = case op of
+  intCvtOp op x = case op of
     WrapI64          -> error "WrapI64 on Word64 has no meaning"
-    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) . fromValue 1
-    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) . fromValue 1
-    TruncSF32        -> fmap (toValue . i64_trunc_s_f32) . fromValue 1
-    TruncUF32        -> fmap (toValue . i64_trunc_u_f32) . fromValue 1
-    TruncSF64        -> fmap (toValue . i64_trunc_s_f64) . fromValue 1
-    TruncUF64        -> fmap (toValue . i64_trunc_u_f64) . fromValue 1
-    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) . fromValue 1
-    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) . fromValue 1
-    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) . fromValue 1
-    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) . fromValue 1
-    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) . fromValue 1
+    ExtendSI32       -> fmap (toValue . i64_extend_s_i32) (fromValue 1 x)
+    ExtendUI32       -> fmap (toValue . i64_extend_u_i32) (fromValue 1 x)
+    TruncSF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f32)
+    TruncUF32        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f32)
+    TruncSF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_s_f64)
+    TruncUF64        -> fmap toValue (fromValue 1 x >>= i64_trunc_u_f64)
+    TruncSSatF32     -> fmap (toValue . i64_trunc_sat_s_f32) (fromValue 1 x)
+    TruncUSatF32     -> fmap (toValue . i64_trunc_sat_u_f32) (fromValue 1 x)
+    TruncSSatF64     -> fmap (toValue . i64_trunc_sat_s_f64) (fromValue 1 x)
+    TruncUSatF64     -> fmap (toValue . i64_trunc_sat_u_f64) (fromValue 1 x)
+    ReinterpretFloat -> fmap (toValue . i64_reinterpret_f64) (fromValue 1 x)
 
   idiv_s = checkDiv0Minus1 $ \x -> fromIntegral . quot   (fromIntegral x :: Int64) . fromIntegral
   irem_s = checkDiv0 $ \x -> fromIntegral . rem    (fromIntegral x :: Int64) . fromIntegral
@@ -613,6 +729,9 @@ instance IntType Word64 where
   ige_s x y = (fromIntegral x :: Int64) >= (fromIntegral y :: Int64)
 
 instance FloatType Float where
+  canonicalNaN = f32CanonicalNaN
+  isSignNegative f = (floatToBits f `shiftR` 31) == 1
+
   floatCvtOp op = case op of
     DemoteF64      -> fmap (toValue . f32_demote_f64) . fromValue 1
     PromoteF32     -> error "PromoteF32 on Float has no meaning"
@@ -622,12 +741,51 @@ instance FloatType Float where
     ConvertUI64    -> fmap (toValue . f32_convert_u_i64) . fromValue 1
     ReinterpretInt -> fmap (toValue . f32_reinterpret_i32) . fromValue 1
 
+  fmin a b
+    | a == b = floatFromBits (floatToBits a .|. floatToBits b)
+    | a < b = a
+    | a > b = b
+    | otherwise = f32CanonicalNaN
+
+  fmax a b
+    | a == b = floatFromBits (floatToBits a .&. floatToBits b)
+    | a < b = b
+    | a > b = a
+    | otherwise = f32CanonicalNaN
+
+  fcopysign f1 f2 =
+    let val = floatToBits f1 .&. 0x7FFFFFFF -- bits 0..31
+        sign = floatToBits f2 .&. 0x80000000 -- 32th bit
+     in
+        floatFromBits (sign .|. val)
+
 instance FloatType Double where
+  canonicalNaN = f64CanonicalNaN
+  isSignNegative d = (doubleToBits d `shiftR` 63) == 1
+
   floatCvtOp op = case op of
     DemoteF64      -> error "DemoteF64 on Double has no meaning"
-    PromoteF32     -> fmap (toValue . f64_promote_f64) . fromValue 1
+    PromoteF32     -> fmap (toValue . f64_promote_f32) . fromValue 1
     ConvertSI32    -> fmap (toValue . f64_convert_s_i32) . fromValue 1
     ConvertUI32    -> fmap (toValue . f64_convert_u_i32) . fromValue 1
     ConvertSI64    -> fmap (toValue . f64_convert_s_i64) . fromValue 1
     ConvertUI64    -> fmap (toValue . f64_convert_u_i64) . fromValue 1
     ReinterpretInt -> fmap (toValue . f64_reinterpret_i64) . fromValue 1
+
+  fmin a b
+    | a == b = doubleFromBits (doubleToBits a .|. doubleToBits b)
+    | a < b = a
+    | a > b = b
+    | otherwise = f64CanonicalNaN
+
+  fmax a b
+    | a == b = doubleFromBits (doubleToBits a .&. doubleToBits b)
+    | a < b = b
+    | a > b = a
+    | otherwise = f64CanonicalNaN
+
+  fcopysign f1 f2 =
+    let val = doubleToBits f1 .&. 0x7FFFFFFFFFFFFFFF -- bits 0..33
+        sign = doubleToBits f2 .&. 0x8000000000000000 -- 64th bit
+     in
+        doubleFromBits (sign .|. val)
