@@ -204,18 +204,20 @@ expr = do
  where
   constant =  go "i32.const" (const_i32 @w @m) (fromIntegral <$> negOr_ int)
           <|> go "f32.const" (const_f32 @w @m) (negOr_ float32)
-          <|> go "i64.const" (const_i64 @w @m) (negOr_ int)
+          <|> go "i64.const" (const_i64 @w @m) (fromIntegral <$> negOr_ int)
           <|> go "f64.const" (const_f64 @w @m) (negOr_ float64)
    where
+    int :: Parser Integer
     int         = do{ f <- P.lexeme lexer sign
                     ; n <- nat
-                    ; return (f (fromIntegral n))
+                    ; return (f n)
                     }
 
     sign        =   (char '-' >> return negate)
                 <|> (char '+' >> return id)
                 <|> return id
 
+    nat :: Parser Integer
     nat         = zeroNumber <|> decimal
 
     zeroNumber  = do{ _ <- char '0'
