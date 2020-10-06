@@ -493,7 +493,11 @@ i32_trunc_sat_s_f64 d
   | otherwise = truncate d
 
 i32_trunc_sat_u_f64 :: Double -> Int32
-i32_trunc_sat_u_f64 = truncate -- FIXME
+i32_trunc_sat_u_f64 d
+  | isNaN d = 0
+  | d <= -1.0 = 0
+  | d >= negate (fromIntegral (minBound :: Int32)) * 2.0 = -1
+  | otherwise = truncate d
 
 i32_reinterpret_f32 :: Float -> Word32
 i32_reinterpret_f32 = floatToBits
@@ -530,7 +534,12 @@ i64_trunc_s_f64 f = do
       Right (truncate f)
 
 i64_trunc_u_f64 :: Double -> Either NumericError Word64
-i64_trunc_u_f64 f = checkNonNaN f >> Right (truncate f)
+i64_trunc_u_f64 f = do
+    checkNonNaN f
+    if f >= negate (fromIntegral (minBound :: Int64) :: Double) * 2.0 || f <= -1.0 then
+      Left NumericIntegerOverflow
+    else
+      Right (truncate f)
 
 i64_trunc_sat_s_f32 :: Float -> Int64
 i64_trunc_sat_s_f32 f
@@ -544,7 +553,7 @@ i64_trunc_sat_u_f32 f
   | isNaN f = 0
   | f <= -1.0 = 0
   | f >= negate (fromIntegral (minBound :: Int64)) * 2.0 = -1
-  | f >= negate (fromIntegral (minBound :: Int64)) = (truncate (f - 9223372036854775808.0)) .|. minBound
+  | f >= negate (fromIntegral (minBound :: Int64)) = round (f - 9223372036854775808.0) .|. minBound
   | otherwise = truncate f
 
 i64_trunc_sat_s_f64 :: Double -> Int64
@@ -555,7 +564,12 @@ i64_trunc_sat_s_f64 d
   | otherwise = truncate d
 
 i64_trunc_sat_u_f64 :: Double -> Int64
-i64_trunc_sat_u_f64 = truncate -- FIXME
+i64_trunc_sat_u_f64 d
+  | isNaN d = 0
+  | d <= -1.0 = 0
+  | d >= negate (fromIntegral (minBound :: Int64)) * 2.0 = -1
+  | d >= negate (fromIntegral (minBound :: Int64)) = round (d - 9223372036854775808.0) .|. minBound
+  | otherwise = truncate d
 
 i64_reinterpret_f64 :: Double -> Word64
 i64_reinterpret_f64 = doubleToBits
