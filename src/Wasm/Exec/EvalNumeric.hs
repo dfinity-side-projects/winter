@@ -584,10 +584,24 @@ f32_convert_u_i32 :: Word32 -> Float
 f32_convert_u_i32 = fromIntegral
 
 f32_convert_s_i64 :: Int64 -> Float
-f32_convert_s_i64 = fromIntegral
+f32_convert_s_i64 i
+  | i /= minBound && abs i < 0x10000000000000 = fromIntegral i
+  | otherwise =
+    let
+      r | i .&. 0xfff == 0 = 0
+        | otherwise = 1
+    in
+      fromIntegral ((i `shiftR` 12) .|. r) * (2 ** 12)
 
 f32_convert_u_i64 :: Word64 -> Float
-f32_convert_u_i64 = fromIntegral
+f32_convert_u_i64 i
+  | i < 0x10000000000000 = fromIntegral i
+  | otherwise =
+    let
+      r | i .&. 0xfff == 0 = 0
+        | otherwise = 1
+    in
+      fromIntegral ((i `shiftR` 12) .|. r) * (2 ** 12)
 
 f32_reinterpret_i32 :: Word32 -> Float
 f32_reinterpret_i32 = floatFromBits
@@ -604,8 +618,12 @@ f64_convert_u_i32 = fromIntegral
 f64_convert_s_i64 :: Int64 -> Double
 f64_convert_s_i64 = fromIntegral
 
-f64_convert_u_i64 :: Word64 -> Double
-f64_convert_u_i64 = fromIntegral
+f64_convert_u_i64 :: Int64 -> Double
+f64_convert_u_i64 i
+  | i >= 0 = fromIntegral i
+  | otherwise =
+    let i' = fromIntegral i :: Word64
+     in fromIntegral ((i' `shiftR` 1) .|. (i' .&. 1)) * 2.0
 
 f64_reinterpret_i64 :: Word64 -> Double
 f64_reinterpret_i64 = doubleFromBits
