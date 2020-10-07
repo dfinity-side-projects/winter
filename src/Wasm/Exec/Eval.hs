@@ -887,6 +887,14 @@ initialize mod names mods = do
     start_err <-
       forM (mod^.moduleStart) $ \start -> lift $ do
         f <- func inst3 start
+        -- Catch traps in "start" function and propagate those without causing
+        -- the whole initialization to fail. This is implemented differently
+        -- than the reference interpreter, but it implements the same thing. In
+        -- the reference interpreter functions have direct access to their
+        -- modules, so even if initialization fails because of a trap in "start"
+        -- the functions added to tables etc. still work. In Winter, functions
+        -- have module references, not actual module instances, so we need to
+        -- add the module to the store when "start" traps.
         catchError (invoke (IM.insert ref inst3 mods) inst3 f [] >> pure Nothing)
                    (\e -> pure (Just (show e)))
 
