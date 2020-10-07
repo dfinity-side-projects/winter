@@ -84,7 +84,7 @@ class Show (Value w) => WasmEngine w m where
 
   initializeModule
     :: Module w -> Map Text ModuleRef -> IntMap (ModuleInst w m)
-    -> m (Either String (ModuleRef, ModuleInst w m))
+    -> m (Either String (ModuleRef, ModuleInst w m, Maybe String))
 
   invokeByName
     :: IntMap (ModuleInst w m) -> ModuleInst w m -> Text
@@ -521,9 +521,20 @@ invokeAction (ActionGet mname nm) k = do
 
 invokeModule
   :: forall w m. (MonadFail m, WasmEngine w m)
-  => (String -> m ByteString)                       -- convert module into Wasm binary
+  => (String -> m ByteString)
+     -- ^ Convert module into Wasm binary
   -> ModuleDecl
-  -> (Either String () -> StateT (CheckState w m) m ())
+  -> (Either String (Maybe String) -> StateT (CheckState w m) m ())
+     -- ^ Continuation. Argument is one of these:
+     --
+     -- - Left err:         Instantiation failed with "err". In this case the module
+     --                     won't be available.
+     --
+     -- - Right Nothing:    Instantiation successful, start function did not trap.
+     --
+     -- - Right (Just err): Instantiation successful, but start function
+     --                     trapped. Trapping in start function doesn't make the
+     --                     module unavailable.
   -> StateT (CheckState w m) m ()
 invokeModule readModule decl k = do
   (mname, wasm) <- case decl of
@@ -539,18 +550,11 @@ invokeModule readModule decl k = do
       case eres of
         Left err ->
           k $ Left $ "Error initializing module " ++ err
-        Right (ref, inst) -> do
+        Right (ref, inst, start_err) -> do
           checkStateRef .= ref
           checkStateModules.at ref ?= inst
           forM_ mname $ \nm -> checkStateNames.at nm ?= ref
-
-
--- These tests currently do not work.
-ignoredFunctions :: [String]
-ignoredFunctions = [
-  -- linking.wast
-  "get table[0]"
-  ]
+          k (Right start_err)
 
 parseWastFile
   :: forall w m. (MonadFail m, MonadBaseControl IO m, WasmEngine w m)
@@ -574,11 +578,6 @@ parseWastFile path input preNames preMods readModule step valEq assertFailure =
               Right _ -> return ()
 
         CmdAssertion e -> case e of
-          AssertReturn (ActionInvoke _ nm _) _
-            | nm `elem` ignoredFunctions -> return ()
-          AssertTrap (ActionInvoke _ nm _) _
-            | nm `elem` ignoredFunctions -> return ()
-
           AssertReturn a exps -> do
             let exps' = exps^..traverse._Constant
             invokeAction a $ lift . \case
@@ -597,7 +596,8 @@ parseWastFile path input preNames preMods readModule step valEq assertFailure =
           AssertTrapModule moddecl msg ->
             invokeModule readModule moddecl $ \case
               Left _ -> return ()
-              Right _ -> lift $ assertFailure $ "Did not trap, expected " ++ msg
+              Right (Just _err) -> return ()
+              Right Nothing -> lift $ assertFailure $ "Did not trap, expected " ++ msg
 
           AssertReturnCanonicalNan _act  -> return ()
           AssertReturnArithmeticNan _act -> return ()
