@@ -543,6 +543,7 @@ invokeModule readModule decl k = do
           checkStateRef .= ref
           checkStateModules.at ref ?= inst
           forM_ mname $ \nm -> checkStateNames.at nm ?= ref
+          k (Right ())
 
 
 -- These tests currently do not work.
