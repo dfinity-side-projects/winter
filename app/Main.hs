@@ -6,7 +6,7 @@
 module Main where
 
 import Control.Applicative           ((<|>))
-import Control.Monad                 (void)
+import Control.Monad                 (void, forM_)
 import Control.Monad.Except          (runExceptT)
 import Data.Binary.Get               (runGet)
 import Data.Default.Class            (Default (..))
@@ -15,6 +15,7 @@ import Data.Map                      (singleton, fromList)
 import Data.Text.Lazy                (pack)
 import System.Console.CmdArgs        (Data, cmdArgs)
 import Text.ParserCombinators.Parsec (Parser)
+import Control.Monad.IO.Class
 
 import qualified Data.ByteString.Lazy          as Lazy
 import qualified Data.IntMap                   as IntMap
@@ -132,7 +133,9 @@ main = do
       result <- runExceptT $ do
         let names = singleton "Main" 1
             mods  = IntMap.singleton 1 app
-        (ref, inst) <- initialize ast names mods
+        (ref, inst, mb_start_err) <- initialize ast names mods
+        forM_ mb_start_err $ \start_err ->
+          liftIO (putStrLn ("start function trapped: " ++ start_err))
         let name = pack func
         invokeByName (IntMap.insert ref inst mods) inst name values
       case result of
