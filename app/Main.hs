@@ -135,7 +135,7 @@ main = do
             mods  = IntMap.singleton 1 app
         (ref, inst, mb_start_err) <- initialize ast names mods
         forM_ mb_start_err $ \start_err ->
-          liftIO (putStrLn ("start function trapped: " ++ start_err))
+          liftIO $ putStrLn $ "start function trapped: " ++ show start_err
         let name = pack func
         invokeByName (IntMap.insert ref inst mods) inst name values
       case result of
