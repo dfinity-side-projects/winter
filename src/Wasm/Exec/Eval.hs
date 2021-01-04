@@ -29,6 +29,7 @@ module Wasm.Exec.Eval
   , createHostFuncEff
   , elem
   , invoke
+  , EvalError(..)
   ) where
 
 import           Control.Exception
@@ -851,14 +852,14 @@ resolveImports names mods inst = flip execStateT inst $
               m' <- lift $ addImport m ext im
               put m'
 
--- | Initialize a module. `Maybe String` in success case is for the trap message
+-- | Initialize a module. `Maybe EvalError` in success case is for the trap message
 -- in "start" function of the module. Trapping in "start" doesn't cause
 -- initialization to fail so we treat that case specially.
 initialize :: (Regioned f, Show1 f, PrimMonad m)
            => Module f
            -> Map Text ModuleRef
            -> IntMap (ModuleInst f m)
-           -> EvalT m (ModuleRef, ModuleInst f m, Maybe String)
+           -> EvalT m (ModuleRef, ModuleInst f m, Maybe EvalError)
 initialize mod names mods = do
   inst <- resolveImports names mods (emptyModuleInst mod)
   let ref = nextKey mods
@@ -896,7 +897,7 @@ initialize mod names mods = do
         -- have module references, not actual module instances, so we need to
         -- add the module to the store when "start" traps.
         catchError (invoke (IM.insert ref inst3 mods) inst3 f [] >> pure Nothing)
-                   (\e -> pure (Just (show e)))
+                   (pure . Just)
 
     pure (join start_err)
 
@@ -906,25 +907,25 @@ initialize mod names mods = do
            :: Module Identity
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Identity IO)
-           -> EvalT IO (ModuleRef, ModuleInst Identity IO, Maybe String) #-}
+           -> EvalT IO (ModuleRef, ModuleInst Identity IO, Maybe EvalError) #-}
 
 {-# SPECIALIZE initialize
            :: Module Identity
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Identity (ST s))
-           -> EvalT (ST s) (ModuleRef, ModuleInst Identity (ST s), Maybe String) #-}
+           -> EvalT (ST s) (ModuleRef, ModuleInst Identity (ST s), Maybe EvalError) #-}
 
 {-# SPECIALIZE initialize
            :: Module Phrase
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Phrase IO)
-           -> EvalT IO (ModuleRef, ModuleInst Phrase IO, Maybe String) #-}
+           -> EvalT IO (ModuleRef, ModuleInst Phrase IO, Maybe EvalError) #-}
 
 {-# SPECIALIZE initialize
            :: Module Phrase
            -> Map Text ModuleRef
            -> IntMap (ModuleInst Phrase (ST s))
-           -> EvalT (ST s) (ModuleRef, ModuleInst Phrase (ST s), Maybe String) #-}
+           -> EvalT (ST s) (ModuleRef, ModuleInst Phrase (ST s), Maybe EvalError) #-}
 
 nextKey :: IntMap a -> IM.Key
 nextKey m = go (max 1 (IM.size m))
