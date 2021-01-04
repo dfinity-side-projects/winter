@@ -18,8 +18,6 @@ jobs:
         path: /nix/store
         key: ${{ matrix.os }}-nix-store
     - name: Install nix
-      uses: cachix/install-nix-action@v10
-      with:
-        skip_adding_nixpkgs_channel: false
+      uses: cachix/install-nix-action@v12
     - name: Build
       run: nix-build --max-jobs 2

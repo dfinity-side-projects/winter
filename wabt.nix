@@ -2,21 +2,15 @@
 
 stdenv.mkDerivation rec {
   pname = "wabt";
-  version = "1.0.19+git";
+  version = "1.0.20";
 
   src = fetchFromGitHub {
     owner = "WebAssembly";
     repo = "wabt";
-    rev = "ee87440dedb4335d5ca8ec25e86b36c27a5b3368";
-    sha256 = "1z2df3j36yjzj5a106yqpsapvfpbav2862ffrlw3mjp0512q3f4x";
+    rev = version;
+    sha256 = "1wwyljppxz03slvgx809g87mdrglpimz4xaici71a9mqwjpgj0l8";
     fetchSubmodules = true;
   };
-
-  # https://github.com/WebAssembly/wabt/pull/1408
-  patches = [ (fetchpatch {
-    url = "https://github.com/WebAssembly/wabt/pull/1408/commits/28505f4db6e4561cf6840af5c304a9aa900c4987.patch";
-    sha256 = "1nh1ddsak6w51np17xf2r7i0czxrjslz1i4impmmp88h5bp2yjba";
-  }) ];
 
   nativeBuildInputs = [ cmake ];
   cmakeFlags = [ "-DBUILD_TESTS=OFF" "-DCMAKE_PROJECT_VERSION=${version}" ];
