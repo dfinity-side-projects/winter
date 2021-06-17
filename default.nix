@@ -1,5 +1,5 @@
-{ rev    ? "66cd39409e8ae1e2981edfb33bb06c164893d70d" # release-20.09
-, sha256 ? "1c44akgqbqsm2b6k5b850lb0q7wq5l5p4hm6bqbaif1h05sc2bkx"
+{ rev    ? "0d40179fd4cd7252bd8f8763c02cc8991b891219" # release-21.05
+, sha256 ? "0n2wm7n0aar2j2cjm22swm09dsmzgji34mb11nmr1ffs3vzhgr07"
 
 , pkgs   ?
     if builtins.compareVersions builtins.nixVersion "2.0" < 0
@@ -10,10 +10,6 @@
       }) {
          config.allowUnfree = true;
          config.allowBroken = false;
-         overlays = [ (self: super: {
-          # due to https://github.com/WebAssembly/wabt/issues/1551:
-          wabt = super.callPackage ./wabt.nix {};
-        }) ];
       }
 
 , returnShellEnv ? pkgs.lib.inNixShell
