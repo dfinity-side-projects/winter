@@ -20,6 +20,7 @@ import Data.Text.Lazy as Text
 import qualified Data.Vector as V
 import GHC.Generics
 import Lens.Micro.Platform as Lens
+import Text.Show
 
 import Wasm.Syntax.Ops
 import Wasm.Syntax.Ops.Float as F
@@ -101,22 +102,22 @@ data InstrF (phrase :: * -> *) fix
   | Convert ConvertOp
   deriving Generic
 
-instance (NFData1 phrase, NFData fix) => NFData (InstrF phrase fix) where
-  rnf = \case
+instance (NFData1 phrase) => NFData1 (InstrF phrase) where
+  liftRnf r = \case
     Unreachable -> ()
     Nop -> ()
     Drop -> ()
     Select -> ()
     Block result expr ->
       rnf result `seq`
-      rnfLiftLift expr
+      liftRnf (liftRnf r) expr
     Loop result expr ->
       rnf result `seq`
-      rnfLiftLift expr
+      liftRnf (liftRnf r) expr
     If condition consequent alternative ->
       rnf condition `seq`
-      rnfLiftLift consequent `seq`
-      rnfLiftLift alternative
+      liftRnf (liftRnf r) consequent `seq`
+      liftRnf (liftRnf r) alternative
     Br var -> rnfLift var
     BrIf var -> rnfLift var
     BrTable table var ->
@@ -145,7 +146,10 @@ showVecLiftPrec :: (Show a, Show1 f1) => Int -> V.Vector (f1 a) -> ShowS
 showVecLiftPrec p v = showListLiftPrec p (V.toList v)
 
 instance (Show1 phrase, Show fix) => Show (InstrF phrase fix) where
-  showsPrec d = showParen (d > 10) . \case
+  showsPrec = liftShowsPrec showsPrec showList
+
+instance (Show1 phrase) => Show1 (InstrF phrase) where
+  liftShowsPrec sp sl d = showParen (d > 10) . \case
     Unreachable ->
       showString "Unreachable"
     Nop ->
@@ -158,19 +162,19 @@ instance (Show1 phrase, Show fix) => Show (InstrF phrase fix) where
       showString "Block " .
       showPrec 11 result .
       showString " " .
-      showListLiftPrec 11 expr
+      showListWith (liftShowsPrec sp sl 11) expr
     Loop result expr ->
       showString "Loop " .
       showPrec 11 result .
       showString " " .
-      showListLiftPrec 11 expr
+      showListWith (liftShowsPrec sp sl 11) expr
     If condition consequent alternative ->
       showString "If " .
       showPrec 11 condition .
       showString " " .
-      showListLiftPrec 11 consequent .
+      showListWith (liftShowsPrec sp sl 11) consequent .
       showString " " .
-      showListLiftPrec 11 alternative
+      showListWith (liftShowsPrec sp sl 11) alternative
     Br var ->
       showString "Br " .
       showLiftPrec 11 var
@@ -235,8 +239,6 @@ instance (Show1 phrase, Show fix) => Show (InstrF phrase fix) where
       showPrec 11 op
 
 type Instr phrase = Fix (InstrF phrase)
-
-instance NFData1 phrase => NFData (Instr phrase)
 
 type Expr (phrase :: * -> *) = phrase [phrase (Instr phrase)]
 
