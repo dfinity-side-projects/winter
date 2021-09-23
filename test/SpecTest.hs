@@ -9,6 +9,7 @@ import qualified Data.Vector as V
 import           Lens.Micro.Platform
 import           Text.Printf
 
+import qualified Wasm.Exec.Eval as Eval
 import qualified Wasm.Runtime.Func as Func
 import qualified Wasm.Runtime.Global as Global
 import           Wasm.Runtime.Instance
@@ -48,6 +49,7 @@ spectest = do
       , print3
       , print4
       , print5
+      , Eval.getInstructionCount
       ])
     & miExports .~ M.fromList
       [ ("print",         ExternFunc print0)
@@ -56,6 +58,12 @@ spectest = do
       , ("print_f64_f64", ExternFunc print3)
       , ("print_f32",     ExternFunc print4)
       , ("print_f64",     ExternFunc print5)
+          -- To use this, one would include the following in their Wast file:
+          --   (import "spectest" "instr_count" (func $instr_count (result i64)))
+          --   (call $instr_count)
+          -- The result of this call is the current instruction count thus
+          -- far, including the call to $instr_count itself.
+      , ("instr_count",   ExternFunc Eval.getInstructionCount)
       , ("global_i32",    ExternGlobal global0)
       , ("global_f32",    ExternGlobal global1)
       , ("global_f64",    ExternGlobal global2)
@@ -66,7 +74,7 @@ spectest = do
   ret :: Show e => Either e a -> a
   ret = either (error.show) id
 
-  pr ins = Func.allocHostEff (FuncType ins []) print_
+  pr ins = Func.allocHostEff (FuncType ins []) (const print_)
 
   print_ :: [Values.Value] -> IO (Either String [Values.Value])
   print_ vs = Right [] <$ mapM_ print_value vs

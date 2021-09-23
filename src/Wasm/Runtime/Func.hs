@@ -12,10 +12,19 @@ import Wasm.Syntax.Values
 import Wasm.Util.Source
 import Lens.Micro.Platform
 
+data EvalInfo = EvalInfo {
+  instructionCount :: Int
+  }
+
+newEvalInfo :: EvalInfo
+newEvalInfo = EvalInfo {
+  instructionCount = 0
+  }
+
 data FuncInst f m a
   = AstFunc FuncType a (f (Func f))
   | HostFunc FuncType ([Value] -> [Value])
-  | HostFuncEff FuncType ([Value] -> m (Either String [Value]))
+  | HostFuncEff FuncType (EvalInfo -> [Value] -> m (Either String [Value]))
   deriving (Functor, Foldable, Traversable)
 
 _AstFunc :: Traversal' (FuncInst f m a) (FuncType, a, f (Func f))
@@ -26,7 +35,9 @@ _HostFunc :: Traversal' (FuncInst f m a) (FuncType, [Value] -> [Value])
 _HostFunc f (HostFunc x y) = (\(x',y') -> HostFunc x' y') <$> f (x, y)
 _HostFunc _ x = pure x
 
-_HostFuncEff :: Traversal' (FuncInst f m a) (FuncType, [Value] -> m (Either String [Value]))
+_HostFuncEff
+    :: Traversal' (FuncInst f m a)
+                 (FuncType, EvalInfo -> [Value] -> m (Either String [Value]))
 _HostFuncEff f (HostFuncEff x y) = (\(x',y') -> HostFuncEff x' y') <$> f (x, y)
 _HostFuncEff _ x = pure x
 
@@ -74,7 +85,9 @@ alloc = AstFunc
 allocHost :: FuncType -> ([Value] -> [Value]) -> FuncInst f m a
 allocHost = HostFunc
 
-allocHostEff :: FuncType -> ([Value] -> m (Either String [Value])) -> FuncInst f m a
+allocHostEff :: FuncType
+             -> (EvalInfo -> [Value] -> m (Either String [Value]))
+             -> FuncInst f m a
 allocHostEff = HostFuncEff
 
 typeOf :: FuncInst f m a -> FuncType

@@ -23,7 +23,7 @@ import qualified Text.ParserCombinators.Parsec as Parsec
 import qualified Data.Vector as V
 
 import Wasm.Binary.Decode    (getModule)
-import Wasm.Exec.Eval        (initialize, invokeByName)
+import Wasm.Exec.Eval        (initialize, invokeByName, runEvalT)
 import Wasm.Runtime.Func     (allocHostEff)
 import Wasm.Runtime.Instance (Extern (..), ModuleInst(..), emptyModuleInst)
 import Wasm.Syntax.AST       ()
@@ -113,7 +113,7 @@ printI32 _ = fail "printI32: invalid argument"
 
 app :: ModuleInst Identity IO
 app =
-  let printI32' = allocHostEff (FuncType [I32Type] []) printI32
+  let printI32' = allocHostEff (FuncType [I32Type] []) (const printI32)
   in (emptyModuleInst def)
     { _miGlobals  = V.empty
     , _miTables   = V.empty
@@ -133,11 +133,12 @@ main = do
       result <- runExceptT $ do
         let names = singleton "Main" 1
             mods  = IntMap.singleton 1 app
-        (ref, inst, mb_start_err) <- initialize ast names mods
-        forM_ mb_start_err $ \start_err ->
-          liftIO $ putStrLn $ "start function trapped: " ++ show start_err
-        let name = pack func
-        invokeByName (IntMap.insert ref inst mods) inst name values
+        runEvalT $ do
+            (ref, inst, mb_start_err) <- initialize ast names mods
+            forM_ mb_start_err $ \start_err ->
+              liftIO $ putStrLn $ "start function trapped: " ++ show start_err
+            let name = pack func
+            invokeByName (IntMap.insert ref inst mods) inst name values
       case result of
         Left  err     -> fail $ show err
         Right outputs -> print outputs

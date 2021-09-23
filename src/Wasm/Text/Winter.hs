@@ -38,11 +38,11 @@ instance (PrimMonad m, Regioned f, Decode.Decodable f, Show1 f)
   decodeModule = Right . runGet Decode.getModule
   initializeModule m names mods =
     fmap (bimap show (\(r,i,e) -> (r, i, fmap show e)))
-      $ runExceptT $ Eval.initialize m names mods
+      $ runExceptT $ Eval.runEvalT $ Eval.initialize m names mods
 
   invokeByName mods inst name stack =
     fmap (bimap show (,inst))
-      $ runExceptT $ Eval.invokeByName mods inst name stack
+      $ runExceptT $ Eval.runEvalT $ Eval.invokeByName mods inst name stack
   getByName inst name  =
     fmap (bimap show (,inst))
-      $ runExceptT $ Eval.getByName inst name
+      $ runExceptT $ Eval.runEvalT $ Eval.getByName inst name

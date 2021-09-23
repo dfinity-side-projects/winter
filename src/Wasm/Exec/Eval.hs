@@ -29,13 +29,14 @@ module Wasm.Exec.Eval
   , createHostFuncEff
   , elem
   , invoke
+  , runEvalT
   , EvalError(..)
+  , getInstructionCount
   ) where
 
 import           Control.Exception
 import           Control.Monad
 import           Control.Monad.Except
-import           Control.Monad.Trans.Reader hiding (local)
 import           Control.Monad.Trans.State
 import           Control.Monad.Identity
 import           Control.Monad.Primitive
@@ -205,19 +206,20 @@ data Config f m = Config
 
 makeLenses ''Config
 
-type EvalT = ExceptT EvalError
-type CEvalT f m = ReaderT (Config f m) (EvalT m)
+type EvalT m = StateT Func.EvalInfo (ExceptT EvalError m)
 
-getInst :: Monad m => ModuleRef -> CEvalT f m (ModuleInst f m)
-getInst ref = do
-  mres <- view (configModules.at ref)
-  case mres of
+runEvalT :: Monad m => EvalT m a -> ExceptT EvalError m a
+runEvalT = (`evalStateT` Func.newEvalInfo)
+
+getInst :: Monad m => Config f m -> ModuleRef -> EvalT m (ModuleInst f m)
+getInst cfg ref =
+  case cfg^.configModules.at ref of
     Nothing -> throwError $
       EvalCrashError def $ "Reference to unknown module #" ++ show ref
     Just x  -> return x
 
-getFrameInst :: Monad m => CEvalT f m (ModuleInst f m)
-getFrameInst = view (configFrame.frameInst)
+getFrameInst :: Monad m => Config f m -> EvalT m (ModuleInst f m)
+getFrameInst cfg = pure $ cfg^.configFrame.frameInst
 
 newConfig :: IntMap (ModuleInst f m) -> ModuleInst f m -> Config f m
 newConfig mods inst = Config
@@ -268,7 +270,7 @@ elem :: (Regioned f, PrimMonad m)
      -> EvalT m (ModuleFunc f m)
 elem inst x i at' = do
   t <- table inst x
-  x <- lift $ Table.load t i
+  x <- lift $ lift $ Table.load t i
   case x of
     Nothing -> throwError $
       EvalTrapError at' ("uninitialized element " ++ show i)
@@ -339,7 +341,9 @@ step (Code cs _ vs []) = case cs of
         return $ code' { _codeStack = vs ++ _codeStack code' }
     Framed _ code' -> {-# SCC step_Framed1 #-}
         return $ code' { _codeStack = vs ++ _codeStack code' }
-step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
+step(Code cs cfg vs (e:es)) = do
+    modify $ \info ->
+        info { Func.instructionCount = Func.instructionCount info + 1 }
     let at = region e
         -- short form for stepping with the current control stack
         k vs es = return $ Code cs cfg vs es
@@ -350,16 +354,16 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
         (Nop, vs)                      -> {-# SCC step_Nop #-}
           k vs es
         (Block bt es', vs)             -> {-# SCC step_Block #-} do
-          inst <- getFrameInst
-          FuncType ts1 ts2 <- lift $ blockType inst bt
-          (args, vs') <- lift $ splitFrom (length ts1) vs at
+          inst <- getFrameInst cfg
+          FuncType ts1 ts2 <- blockType inst bt
+          (args, vs') <- splitFrom (length ts1) vs at
           return $ Code
             (Label (length ts2) id (Code cs cfg vs' es))
             cfg args (map plain es')
         (Loop bt es', vs)               -> {-# SCC step_Loop #-} do
-          inst <- getFrameInst
-          FuncType ts1 _ts2 <- lift $ blockType inst bt
-          (args, vs') <- lift $ splitFrom (length ts1) vs at
+          inst <- getFrameInst cfg
+          FuncType ts1 _ts2 <- blockType inst bt
+          (args, vs') <- splitFrom (length ts1) vs at
           return $ Code
             (Label (length ts1) (e :) (Code cs cfg vs' es))
             cfg args (map plain es')
@@ -382,15 +386,15 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           k [] (Returning vs @@ at : es)
 
         (Call x, vs) -> {-# SCC step_Call #-} do
-          inst <- getFrameInst
+          inst <- getFrameInst cfg
           -- traceM $ "Call " ++ show (value x)
-          f <- lift $ func inst x
+          f <- func inst x
           k vs (Invoke f @@ at : es)
 
         (CallIndirect x, I32 i : vs) -> {-# SCC step_CallIndirect #-} do
-          inst <- getFrameInst
-          func <- lift $ funcElem inst (0 @@ at) i at
-          t <- lift $ type_ inst x
+          inst <- getFrameInst cfg
+          func <- funcElem inst (0 @@ at) i at
+          t <- type_ inst x
           k vs $
             if t /= Func.typeOf func
             then Trapping "indirect call type mismatch" @@ at : es
@@ -405,32 +409,32 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           k (v1 : vs') es
 
         (GetLocal x, vs) -> {-# SCC step_GetLocal #-} do
-          frame <- view configFrame
-          mut <- lift $ local frame x
+          let frame = cfg^.configFrame
+          mut <- local frame x
           l <- readMutVar mut
           k (l : vs) es
 
         (SetLocal x, v : vs') -> {-# SCC step_SetLocal #-} do
-          frame <- view configFrame
-          mut <- lift $ local frame x
+          let frame = cfg^.configFrame
+          mut <- local frame x
           writeMutVar mut v
           k vs' es
 
         (TeeLocal x, v : vs') -> {-# SCC step_TeeLocal #-} do
-          frame <- view configFrame
-          mut <- lift $ local frame x
+          let frame = cfg^.configFrame
+          mut <- local frame x
           writeMutVar mut v
           k (v : vs') es
 
         (GetGlobal x, vs) -> {-# SCC step_GetGlobal #-} do
-          inst <- getFrameInst
-          g <- lift . lift . Global.load =<< lift (global inst x)
+          inst <- getFrameInst cfg
+          g <- lift . lift . Global.load =<< global inst x
           -- traceM $ "GetGlobal " ++ show (value x) ++ " = " ++ show g
           k (g : vs) es
 
         (SetGlobal x, v : vs') -> {-# SCC step_SetGlobal #-} do
-          inst <- getFrameInst
-          g <- lift $ global inst x
+          inst <- getFrameInst cfg
+          g <- global inst x
           eres <- lift $ lift $ runExceptT $ Global.store g v
           case eres of
             Right () -> k vs' es
@@ -439,8 +443,8 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
               Global.GlobalTypeError  -> "type mismatch at global write"
 
         (Load op, I32 i : vs') -> {-# SCC step_Load #-} do
-          inst <- getFrameInst
-          mem <- lift $ memory inst (0 @@ at)
+          inst <- getFrameInst cfg
+          mem <- memory inst (0 @@ at)
           let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral i)
           let off = fromIntegral (op^.memoryOffset)
           let ty = op^.memoryValueType
@@ -452,8 +456,8 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
 
         (Store op, v : I32 i : vs') -> {-# SCC step_Store #-} do
-          inst <- getFrameInst
-          mem <- lift $ memory inst (0 @@ at)
+          inst <- getFrameInst cfg
+          mem <- memory inst (0 @@ at)
           let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral i)
           let off = fromIntegral (op^.memoryOffset)
           eres <- lift $ lift $ runExceptT $ case op^.memorySize of
@@ -464,14 +468,14 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
 
         (MemorySize, vs) -> {-# SCC step_MemorySize #-} do
-          inst <- getFrameInst
-          mem  <- lift $ memory inst (0 @@ at)
+          inst <- getFrameInst cfg
+          mem  <- memory inst (0 @@ at)
           sz   <- lift $ lift $ Memory.size mem
           k (I32 sz : vs) es
 
         (MemoryGrow, I32 delta : vs') -> {-# SCC step_MemoryGrow #-} do
-          inst    <- getFrameInst
-          mem     <- lift $ memory inst (0 @@ at)
+          inst    <- getFrameInst cfg
+          mem     <- memory inst (0 @@ at)
           oldSize <- lift $ lift $ Memory.size mem
           eres    <- lift $ lift $ runExceptT $ Memory.grow mem delta
           let result = case eres of
@@ -548,7 +552,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
       (Label _ _ code', Returning vs0) -> {-# SCC step_Label_Return #-}
         return $ code' { _codeInstrs = Returning vs0 @@ at : _codeInstrs code' }
       (Label n es0 code', Breaking 0 vs0) -> {-# SCC step_Label_Break1 #-} do
-        vs0' <- lift $ takeFrom n vs0 at
+        vs0' <- takeFrom n vs0 at
         return $ code'
             { _codeStack = vs0' ++ _codeStack code'
             , _codeInstrs = es0 $ _codeInstrs code'
@@ -559,13 +563,13 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
       (Framed _ code', Trapping msg) -> {-# SCC step_Framed_Trap #-}
         return $ code' { _codeInstrs = Trapping msg @@ at : _codeInstrs code' }
       (Framed n code', Returning vs0) -> {-# SCC step_Framed_Return #-} do
-        vs0' <- lift $ takeFrom n vs0 at
+        vs0' <- takeFrom n vs0 at
         return $ code' { _codeStack = vs0' ++ _codeStack code' }
       (Framed _ _, Breaking _ _) -> {-# SCC step_Framed_Break #-}
         throwError $ EvalCrashError at "undefined label"
 
       (_, Invoke func) -> {-# SCC step_Invoke #-} do
-        budget <- view configBudget
+        let budget = cfg^.configBudget
         when (budget == 0) $
           throwError $ EvalExhaustionError at "call stack exhausted"
 
@@ -573,18 +577,18 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             n1 = length ins
             n2 = length out
 
-        (reverse -> args, vs') <- lift $ splitFrom n1 vs at
+        (reverse -> args, vs') <- splitFrom n1 vs at
 
         -- traceM $ "Invoke: ins  = " ++ show ins
         -- traceM $ "Invoke: args = " ++ show args
         -- traceM $ "Invoke: outs = " ++ show outs
         -- traceM $ "Invoke: vs'  = " ++ show vs'
 
-        lift $ checkTypes at ins args
+        checkTypes at ins args
 
         case func of
           Func.AstFunc _ ref f -> do
-            inst' <- getInst ref
+            inst' <- getInst cfg ref
             locals' <- traverse newMutVar $ V.fromList $
               args ++ map defaultValue (value f^.funcLocals)
             let cfg' = cfg & configFrame .~ Frame inst' locals' & configBudget %~ pred
@@ -602,7 +606,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             -- jww (2018-11-01): Need an exception handler here, so we can
             -- report host errors.
             let res = reverse (f args)
-            lift $ checkTypes at out res
+            checkTypes at out res
             k (res ++ vs') es
             -- try (reverse (f args) ++ vs', [])
             -- with Crash (_, msg) -> EvalCrashError at msg)
@@ -610,11 +614,12 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           Func.HostFuncEff _ f -> do
             -- jww (2018-11-01): Need an exception handler here, so we can
             -- report host errors.
-            res' <- lift $ lift $ f args
+            info <- get
+            res' <- lift $ lift $ f info args
             case res' of
               Left err -> throwError $ EvalTrapError at err
               Right (reverse -> res) -> do
-                lift $ checkTypes at out res
+                checkTypes at out res
                 k (res ++ vs') es
                 -- try (reverse (f args) ++ vs', [])
                 -- with Crash (_, msg) -> EvalCrashError at msg)
@@ -741,13 +746,23 @@ createFunc inst ref f = do
 createHostFunc :: FuncType -> ([Value] -> [Value]) -> ModuleFunc f m
 createHostFunc = Func.allocHost
 
-createHostFuncEff :: FuncType -> ([Value] -> m (Either String [Value])) -> ModuleFunc f m
+createHostFuncEff :: FuncType
+                  -> (Func.EvalInfo -> [Value] -> m (Either String [Value]))
+                  -> ModuleFunc f m
 createHostFuncEff = Func.allocHostEff
+
+instructionCountF :: Monad m => Func.EvalInfo -> m (Either String [Value])
+instructionCountF info =
+  pure $ Right [I64 (fromIntegral (Func.instructionCount info))]
+
+getInstructionCount :: Monad m => ModuleFunc f m
+getInstructionCount =
+  createHostFuncEff (FuncType [] [I64Type]) (\info _ -> instructionCountF info)
 
 createTable :: (Regioned f, PrimMonad m)
             => Table f -> EvalT m (TableInst m (ModuleFunc f m))
 createTable tab = do
-  eres <- lift $ runExceptT $ Table.alloc (value tab)
+  eres <- lift $ lift $ runExceptT $ Table.alloc (value tab)
   case eres of
     Left err -> throwError $ EvalTableError (region tab) err
     Right g  -> pure g
@@ -755,7 +770,7 @@ createTable tab = do
 liftMem :: Monad m
         => Region -> ExceptT Memory.MemoryError m a -> EvalT m a
 liftMem at act = do
-  eres <- lift $ runExceptT act
+  eres <- lift $ lift $ runExceptT act
   case eres of
     Left err -> throwError $ EvalMemoryError at err
     Right x  -> pure x
@@ -769,7 +784,7 @@ createGlobal :: (Regioned f, PrimMonad m, Show1 f)
              -> EvalT m (Global.GlobalInst m)
 createGlobal mods inst x@(value -> glob) = do
   v <- evalConst mods inst (glob^.globalValue)
-  eres <- lift $ runExceptT $ Global.alloc (glob^.globalType) v
+  eres <- lift $ lift $ runExceptT $ Global.alloc (glob^.globalType) v
   case eres of
     Left err -> throwError $ EvalGlobalError (region x) err
     Right g  -> pure g
@@ -792,11 +807,11 @@ initTable mods inst s@(value -> seg) = do
   c <- evalConst mods inst (seg^.segmentOffset)
   offset <- i32 c (region (seg^.segmentOffset))
   let end_ = offset + fromIntegral (length (seg^.segmentInit))
-  bound <- lift $ Table.size tab
+  bound <- lift $ lift $ Table.size tab
   when (bound < end_ || end_ < offset) $
     throwError $ EvalLinkError (region s) "elements segment does not fit table"
   fs <- traverse (func inst) (seg^.segmentInit)
-  lift $ Table.blit tab offset (V.fromList fs)
+  lift $ lift $ Table.blit tab offset (V.fromList fs)
 
 initMemory :: (Regioned f, Show1 f, PrimMonad m)
            => IntMap (ModuleInst f m) -> ModuleInst f m -> f (MemorySegment f)
@@ -807,7 +822,7 @@ initMemory mods inst s@(value -> seg) = do
   offset' <- i32 c (region (seg^.segmentOffset))
   let offset = i64_extend_u_i32 (fromIntegral offset')
   let end_ = offset + fromIntegral (B.length (seg^.segmentInit))
-  bound <- lift $ Memory.bound mem
+  bound <- lift $ lift $ Memory.bound mem
   when (fromIntegral bound < end_ || end_ < fromIntegral offset) $
     throwError $ EvalLinkError (region s) "data segment does not fit memory"
   liftMem (region s) $
@@ -819,7 +834,7 @@ addImport :: (Regioned f, Show1 f, PrimMonad m)
           -> f (Import f)
           -> EvalT m (ModuleInst f m)
 addImport inst ext im = do
-  typ <- lift $ externTypeOf ext
+  typ <- lift $ lift $ externTypeOf ext
   if not (matchExternType typ (importTypeFor (inst^.miModule) (value im)))
     then throwError $ EvalLinkError (region im) $
        "incompatible import type for import: " ++ show (value im)
