@@ -497,6 +497,16 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
             Right () -> k vs' es
             Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
 
+        (MemoryCopy, I32 0 : I32 src : I32 dst : vs') -> {-# SCC step_MemoryCopy #-} do
+          inst    <- getFrameInst
+          mem     <- lift $ memory inst (0 @@ at)
+          let addrs = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, src]
+          eres <- lift $ lift $ runExceptT $
+            mapM_ (\addr -> Memory.loadPacked Pack8 ZX mem addr 0 I32Type) addrs
+          case eres of
+            Right () -> k vs' es
+            Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+
         (MemoryCopy, I32 cnt : I32 src : I32 dst : vs') -> {-# SCC step_MemoryCopy #-} do
           inst    <- getFrameInst
           mem     <- lift $ memory inst (0 @@ at)
