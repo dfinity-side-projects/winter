@@ -511,8 +511,9 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           inst    <- getFrameInst
           mem     <- lift $ memory inst (0 @@ at)
           let [addr_dst, addr_src] = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, src]
+          let range = if dst < src then [0 .. pred cnt] else tail $ enumFromThenTo cnt (pred cnt) 0
           eres <- lift $ lift $ runExceptT $
-            mapM_ (\off -> Memory.loadPacked Pack8 ZX mem addr_src off I32Type >>= Memory.storePacked Pack8 mem addr_dst off) [0 .. pred cnt]
+            mapM_ (\off -> Memory.loadPacked Pack8 ZX mem addr_src off I32Type >>= Memory.storePacked Pack8 mem addr_dst off) range
           case eres of
             Right () -> k vs' es
             Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
