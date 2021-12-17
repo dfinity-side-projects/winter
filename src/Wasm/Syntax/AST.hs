@@ -137,6 +137,8 @@ instance (NFData1 phrase) => NFData1 (InstrF phrase) where
     Store op -> rnf op
     MemorySize -> ()
     MemoryGrow -> ()
+    MemoryFill -> ()
+    MemoryCopy -> ()
     Const lit -> rnfLift lit
     Test op -> rnf op
     Compare op -> rnf op
@@ -221,6 +223,10 @@ instance (Show1 phrase) => Show1 (InstrF phrase) where
       showString "MemorySize"
     MemoryGrow ->
       showString "MemoryGrow"
+    MemoryFill ->
+      showString "MemoryFill"
+    MemoryCopy ->
+      showString "MemoryCopy"
     Const lit ->
       showString "Const " .
       showLiftPrec 11 lit
@@ -322,12 +328,14 @@ showWasm d ((value -> Fix instr):instrs) = go instr . showString "\n" . showWasm
     Store (MemoryOp I64Type x y (Just Pack8))       -> showString "i64.store8 " . showsPrec d x . showString " " . showsPrec d y
     Store (MemoryOp I64Type x y (Just Pack16))      -> showString "i64.store16 " . showsPrec d x . showString " " . showsPrec d y
     Store (MemoryOp I64Type x y (Just Pack32))      -> showString "i64.store32 " . showsPrec d x . showString " " . showsPrec d y
-    MemorySize                                      -> showString "memory_size"
-    MemoryGrow                                      -> showString "memory_grow"
-    Const (value -> I32 x)                           -> showString "i32.const " . showsPrec d x
-    Const (value -> I64 x)                           -> showString "i64.const " . showsPrec d x
-    Const (value -> F32 x)                           -> showString "f32.const " . showsPrec d x
-    Const (value -> F64 x)                           -> showString "f64.const " . showsPrec d x
+    MemorySize                                      -> showString "memory.size"
+    MemoryGrow                                      -> showString "memory.grow"
+    MemoryFill                                      -> showString "memory.fill"
+    MemoryCopy                                      -> showString "memory.copy"
+    Const (value -> I32 x)                          -> showString "i32.const " . showsPrec d x
+    Const (value -> I64 x)                          -> showString "i64.const " . showsPrec d x
+    Const (value -> F32 x)                          -> showString "f32.const " . showsPrec d x
+    Const (value -> F64 x)                          -> showString "f64.const " . showsPrec d x
     Unary (I32UnaryOp Clz)                          -> showString "i32.clz"
     Unary (I32UnaryOp Ctz)                          -> showString "i32.ctz"
     Unary (I32UnaryOp Popcnt)                       -> showString "i32.popcnt"
