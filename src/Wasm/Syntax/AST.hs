@@ -94,6 +94,8 @@ data InstrF (phrase :: * -> *) fix
   | Store StoreOp
   | MemorySize
   | MemoryGrow
+  | MemoryFill
+  | MemoryCopy
   | Const (Literal phrase)
   | Test TestOp
   | Compare CompareOp
