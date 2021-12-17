@@ -384,6 +384,15 @@ putInstr = flip (.) unFix $ \case
   MemoryGrow -> do
     putWord8 0x40
     putWord8 0x00
+  MemoryFill -> do
+    putWord8 0xFC
+    putWord8 0x0B
+    putWord8 0x00
+  MemoryCopy -> do
+    putWord8 0xFC
+    putWord8 0x0A
+    putWord8 0x00
+    putWord8 0x00
 
   -- Constants.
   Const (value -> I32 val) -> do
