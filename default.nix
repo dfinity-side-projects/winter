@@ -1,5 +1,5 @@
 { rev    ? "058f304d41966672be66efd978210b9ec8c81687" # release-21.11
-, sha256 ? "0n2wm7n0aar2j2cjm22swm09dsmzgji34mb11nmr1ffs3vzhgr17"
+, sha256 ? "1l0x61jpiw2q78p7bgjk93slgqd3nbbfp0mxlivf6jhsmiymzpzj"
 
 , pkgs   ?
     if builtins.compareVersions builtins.nixVersion "2.0" < 0
