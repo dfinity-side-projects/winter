@@ -14,16 +14,18 @@ main = do
   mwasmPath <- lookupEnv "WASM_SPEC_TESTS"
   testDir <- case mwasmPath of
       Nothing -> error "Please define WASM_SPEC_TESTS to point to .../WebAssembly/spec/test/core"
-      Just path -> return path
+      Just path -> pure path
   putStrLn $ "Using wasm spec test directory: " ++ testDir
   files <- listDirectory testDir
   let wastFiles = flip concatMap files $ \file ->
         [ testDir ++ "/" ++ file
         | ".wast" `isSuffixOf` file
-            && "inline-module.wast" /= file
-              -- We aren't going to bother fully supporting
-              -- Unicode function names in the reference interpreter yet.
-            && "names.wast" /= file
+          && file `notElem`
+          [ "inline-module.wast"
+            -- We aren't going to bother fully supporting
+            -- Unicode function names in the reference interpreter yet.
+          , "names.wast"
+          ]
         ]
 
   defaultMain $ testGroup "main"
