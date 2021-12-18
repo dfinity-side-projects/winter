@@ -59,7 +59,6 @@ import           Prelude hiding (lookup, elem)
 import           Text.Show (showListWith)
 
 import           Wasm.Exec.EvalNumeric
-import           Wasm.Runtime.Memory (pageSize)
 import qualified Wasm.Runtime.Func as Func
 import qualified Wasm.Runtime.Global as Global
 import           Wasm.Runtime.Instance
@@ -485,7 +484,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           mem     <- lift $ memory inst (0 @@ at)
           -- Zero len with offset out-of-bounds at the end of memory is allowed
           sz      <- lift $ lift $ Memory.size mem
-          if pageSize * sz == dst
+          if Memory.pageSize * sz == dst
             then k vs' es
             else do
               let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral dst)
@@ -497,11 +496,14 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
         (MemoryFill, I32 cnt : v : I32 dst : vs') -> {-# SCC step_MemoryFill #-} do
           inst    <- getFrameInst
           mem     <- lift $ memory inst (0 @@ at)
-          let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral dst)
-          eres <- lift $ lift $ runExceptT $ mapM_ (\off -> Memory.storePacked Pack8 mem addr off v) [0 .. pred cnt]
-          case eres of
-            Right () -> k vs' es
-            Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+          let [addr, count] = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, cnt]
+          if addr + count > 2^32
+            then k vs' (Trapping (memoryErrorString Memory.MemoryBoundsError) @@ at : es)
+            else do
+              eres <- lift $ lift $ runExceptT $ mapM_ (\off -> Memory.storePacked Pack8 mem addr off v) [0 .. pred cnt]
+              case eres of
+                Right () -> k vs' es
+                Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
 
         (MemoryCopy, I32 0 : I32 src : I32 dst : vs') -> {-# SCC step_MemoryCopy #-} do
           inst    <- getFrameInst
