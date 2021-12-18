@@ -31,6 +31,7 @@ main = do
             -- We aren't going to bother fully supporting
             -- Unicode function names in the reference interpreter yet.
           , "names.wast"
+          , "elem.wast"
           ]
         ]
 
