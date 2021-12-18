@@ -21,8 +21,8 @@ let
 spec-tests = pkgs.fetchFromGitHub {
     owner  = "WebAssembly";
     repo   = "testsuite";
-    rev    = "35c50bf6fbb002cfdc1227b0af731bdcaf877714";
-    sha256 = "0difcpya5i7fc4xdrysx49186x9vh5yhm88dqpmfppj7ddj39l9i";
+    rev    = "6aacfd8929504d8e02a5144a14d184196ede6790";
+    sha256 = "sha256-HrnTpIEVN3H9P4fuSBUkaMpNdMxa2pbfp1iPElJLlUM";
   };
 
 drv = pkgs.haskellPackages.developPackage {
