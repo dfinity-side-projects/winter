@@ -35,6 +35,7 @@ main = do
           , "ref_is_null.wast"
           , "ref_func.wast"
           , "unreached-valid.wast"
+          , "exports.wast"
           , "imports.wast"
           , "br_table.wast"
           , "table_size.wast"
@@ -45,7 +46,10 @@ main = do
           , "global.wast"
           , "linking.wast"
           , "binary-leb128.wast"
-          , "exports.wast"
+          , "elem.wast"
+          , "call_indirect.wast"
+          , "binary.wast"
+          , "select.wast"
           ]
         ]
 
