@@ -17,8 +17,8 @@ import           Wasm.Util.Float (floatToBits, doubleToBits)
 import           SpecTest (spectest)
 import           Wat2Wasm (wat2Wasm)
 
-tests :: [FilePath] -> TestTree
-tests files = testGroup "spec" $ map prep files
+tests :: String -> [FilePath] -> TestTree
+tests name files = testGroup name $ map prep files
  where
   prep file = testCaseSteps file $ \step -> do
     input <- Prelude.readFile file

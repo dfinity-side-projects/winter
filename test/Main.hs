@@ -74,6 +74,6 @@ main = do
   defaultMain $ testGroup "main"
     [ Property.tests
     , Unit.tests
-    , Spec.tests wastFilesMVP
-    , Spec.tests wastFiles
+    , Spec.tests "spec MVP" wastFilesMVP
+    , Spec.tests "spec" wastFiles
     ]
