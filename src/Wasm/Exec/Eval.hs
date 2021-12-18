@@ -59,6 +59,7 @@ import           Prelude hiding (lookup, elem)
 import           Text.Show (showListWith)
 
 import           Wasm.Exec.EvalNumeric
+import           Wasm.Runtime.Memory (pageSize)
 import qualified Wasm.Runtime.Func as Func
 import qualified Wasm.Runtime.Global as Global
 import           Wasm.Runtime.Instance
@@ -483,10 +484,15 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           inst    <- getFrameInst
           mem     <- lift $ memory inst (0 @@ at)
           let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral dst)
-          eres <- lift $ lift $ runExceptT $ Memory.loadPacked Pack8 ZX mem addr 0 I32Type
-          case eres of
-            Right _ -> k vs' es
-            Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+          -- Zero len with offset out-of-bounds at the end of memory is allowed
+          sz      <- lift $ lift $ Memory.size mem
+          if pageSize * sz == addr
+            then k vs' es
+            else do
+              eres <- lift $ lift $ runExceptT $ Memory.loadPacked Pack8 ZX mem addr 0 I32Type
+              case eres of
+                Right _ -> k vs' es
+                Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
 
         (MemoryFill, I32 cnt : v : I32 dst : vs') -> {-# SCC step_MemoryFill #-} do
           inst    <- getFrameInst
