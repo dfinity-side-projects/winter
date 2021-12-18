@@ -25,6 +25,8 @@ main = do
             -- We aren't going to bother fully supporting
             -- Unicode function names in the reference interpreter yet.
           , "names.wast"
+            -- These contain features that `winter` won't accept yet
+          , "bulk.wast"
           ]
         ]
 
