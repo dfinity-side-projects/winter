@@ -258,9 +258,9 @@ getMathPrefix = do
     0x05 -> return $ Convert $ I64ConvertOp Int.TruncUSatF32
     0x06 -> return $ Convert $ I64ConvertOp Int.TruncSSatF64
     0x07 -> return $ Convert $ I64ConvertOp Int.TruncUSatF64
-    0x0A -> do 0 <- getWord8
+    0x0A -> do (0, 0) <- (,) <$> getWord8 <*> getWord8
                return $ MemoryCopy
-    0x0B -> do (0, 0) <- (,) <$> getWord8 <*> getWord8
+    0x0B -> do 0 <- getWord8
                return $ MemoryFill
     _    -> fail (printf "getMathPrefix: illegal op %d" byte)
 
