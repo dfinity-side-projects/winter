@@ -13,7 +13,7 @@ main :: IO ()
 main = do
   mwasmPath <- lookupEnv "WASM_SPEC_TESTS"
   testDir <- case mwasmPath of
-      Nothing -> error "Please define WASM_SPEC_TESTS to point to .../WebAssebly/spec/test/core"
+      Nothing -> error "Please define WASM_SPEC_TESTS to point to .../WebAssembly/spec/test/core"
       Just path -> return path
   putStrLn $ "Using wasm spec test directory: " ++ testDir
   files <- listDirectory testDir
