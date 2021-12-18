@@ -11,11 +11,29 @@ import Spec as Spec (tests)
 
 main :: IO ()
 main = do
+  mwasmPathMVP <- lookupEnv "WASM_SPEC_TESTS_MVP"
+  testDirMVP <- case mwasmPathMVP of
+      Nothing -> error "Please define WASM_SPEC_TESTS_MVP to point to .../WebAssembly/spec/test/core"
+      Just path -> pure path
   mwasmPath <- lookupEnv "WASM_SPEC_TESTS"
   testDir <- case mwasmPath of
       Nothing -> error "Please define WASM_SPEC_TESTS to point to .../WebAssembly/spec/test/core"
       Just path -> pure path
+  putStrLn $ "Using wasm MVP spec test directory: " ++ testDirMVP
   putStrLn $ "Using wasm spec test directory: " ++ testDir
+
+  files <- listDirectory testDirMVP
+  let wastFilesMVP = flip concatMap files $ \file ->
+        [ testDirMVP ++ "/" ++ file
+        | ".wast" `isSuffixOf` file
+          && file `notElem`
+          [ "inline-module.wast"
+            -- We aren't going to bother fully supporting
+            -- Unicode function names in the reference interpreter yet.
+          , "names.wast"
+          ]
+        ]
+
   files <- listDirectory testDir
   let wastFiles = flip concatMap files $ \file ->
         [ testDir ++ "/" ++ file
@@ -56,5 +74,6 @@ main = do
   defaultMain $ testGroup "main"
     [ Property.tests
     , Unit.tests
+    , Spec.tests wastFilesMVP
     , Spec.tests wastFiles
     ]
