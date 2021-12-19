@@ -484,14 +484,9 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           mem     <- lift $ memory inst (0 @@ at)
           -- Zero len with offset out-of-bounds at the end of memory is allowed
           sz      <- lift $ lift $ Memory.size mem
-          if Memory.pageSize * sz == dst
+          if Memory.pageSize * sz >= dst
             then k vs' es
-            else do
-              let addr = fromIntegral $ i64_extend_u_i32 (fromIntegral dst)
-              eres <- lift $ lift $ runExceptT $ Memory.loadPacked Pack8 ZX mem addr 0 I32Type
-              case eres of
-                Right _ -> k vs' es
-                Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+            else k vs' (Trapping (memoryErrorString Memory.MemoryBoundsError) @@ at : es)
 
         (MemoryFill, I32 cnt : v : I32 dst : vs') -> {-# SCC step_MemoryFill #-} do
           inst    <- getFrameInst
