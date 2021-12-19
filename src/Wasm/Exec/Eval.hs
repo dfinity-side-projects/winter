@@ -510,7 +510,7 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
           mem     <- lift $ memory inst (0 @@ at)
           -- Zero len with dest offset out-of-bounds at the end of memory is allowed
           sz      <- lift $ lift $ Memory.size mem
-          if Memory.pageSize * sz == dst
+          if Memory.pageSize * sz >= dst && Memory.pageSize * sz >= src
             then k vs' es
             else do
               let addrs = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, src]
