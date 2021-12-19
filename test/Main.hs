@@ -22,8 +22,8 @@ main = do
   putStrLn $ "Using wasm MVP spec test directory: " ++ testDirMVP
   putStrLn $ "Using wasm spec test directory: " ++ testDir
 
-  files <- listDirectory testDirMVP
-  let wastFilesMVP = flip concatMap files $ \file ->
+  filesMVP <- listDirectory testDirMVP
+  let wastFilesMVP = flip concatMap filesMVP $ \file ->
         [ testDirMVP ++ "/" ++ file
         | ".wast" `isSuffixOf` file
           && file `notElem`
