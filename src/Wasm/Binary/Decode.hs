@@ -261,7 +261,7 @@ getMathPrefix = do
     0x0A -> do (0, 0) <- (,) <$> getWord8 <*> getWord8
                return MemoryCopy
     0x0B -> do 0 <- getWord8
-               return $ MemoryFill
+               return MemoryFill
     _    -> fail (printf "getMathPrefix: illegal op %d" byte)
 
 
