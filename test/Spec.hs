@@ -17,8 +17,8 @@ import           Wasm.Util.Float (floatToBits, doubleToBits)
 import           SpecTest (spectest)
 import           Wat2Wasm (wat2Wasm)
 
-tests :: String -> [FilePath] -> TestTree
-tests name files = testGroup name $ map prep files
+tests :: [String] -> String -> [FilePath] -> TestTree
+tests languageFlags name files = testGroup name $ map prep files
  where
   prep file = testCaseSteps file $ \step -> do
     input <- Prelude.readFile file
@@ -26,7 +26,7 @@ tests name files = testGroup name $ map prep files
     parseWastFile @(Winter Phrase) @IO file input
       (M.singleton "spectest" 1)
       (IM.singleton 1 inst)
-      wat2Wasm step valListEq assertFailure
+      (wat2Wasm languageFlags) step valListEq assertFailure
 
 valListEq :: [Value] -> [Value] -> Bool
 valListEq vs1 vs2 =

@@ -7,18 +7,18 @@ import           System.Exit
 import           System.IO.Temp
 import           System.Process
 
-wat2Wasm :: String -> IO ByteString
-wat2Wasm contents = do
+wat2Wasm :: [String] -> String -> IO ByteString
+wat2Wasm languageFlags contents = do
   wat  <- emptyTempFile "." "test.wat"
   wasm <- emptyTempFile "." "test.wasm"
   writeFile wat contents
   (exit, _out, err) <-
-    readProcessWithExitCode "wat2wasm" [wat, "--enable-bulk-memory", "-o", wasm] ""
+    readProcessWithExitCode "wat2wasm" (wat : languageFlags <> ["-o", wasm]) ""
   case exit of
-    ExitSuccess   -> do
+    ExitSuccess -> do
       res <- BL.readFile wasm
       removeFile wat
       removeFile wasm
-      return res
+      pure res
     ExitFailure _ ->
       fail err

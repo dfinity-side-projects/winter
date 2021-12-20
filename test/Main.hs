@@ -31,7 +31,6 @@ main = do
             -- We aren't going to bother fully supporting
             -- Unicode function names in the reference interpreter yet.
           , "names.wast"
-          , "elem.wast"
           ]
         ]
 
@@ -75,6 +74,6 @@ main = do
   defaultMain $ testGroup "main"
     [ Property.tests
     , Unit.tests
-    , Spec.tests "spec MVP" wastFilesMVP
-    , Spec.tests "spec" wastFiles
+    , Spec.tests [] "spec MVP" wastFilesMVP
+    , Spec.tests ["--enable-bulk-memory"] "spec" wastFiles
     ]
