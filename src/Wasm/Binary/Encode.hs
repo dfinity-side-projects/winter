@@ -385,14 +385,9 @@ putInstr = flip (.) unFix $ \case
     putWord8 0x40
     putWord8 0x00
   MemoryFill -> do
-    putWord8 0xFC
-    putWord8 0x0B
-    putWord8 0x00
+    mapM_ putWord8 [0xFC, 0x0B, 0x00]
   MemoryCopy -> do
-    putWord8 0xFC
-    putWord8 0x0A
-    putWord8 0x00
-    putWord8 0x00
+    mapM_ putWord8 [0xFC, 0x0A, 0x00, 0x00]
 
   -- Constants.
   Const (value -> I32 val) -> do
