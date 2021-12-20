@@ -13,7 +13,6 @@
       }
 
 , returnShellEnv ? pkgs.lib.inNixShell
-, mkDerivation   ? null
 }:
 
 let
