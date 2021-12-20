@@ -56,6 +56,6 @@ drv = pkgs.haskellPackages.developPackage {
 };
 
 in drv.overrideAttrs(old:
-  { WASM_SPEC_TESTS_MVP = "${spec-tests-mvp}";
-    WASM_SPEC_TESTS = "${spec-tests}";
+  { WASM_SPEC_TESTS_MVP = spec-tests-mvp;
+    WASM_SPEC_TESTS = spec-tests;
   })
