@@ -9,8 +9,8 @@ Author:        Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.or
 Maintainer:    Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.org>
 Stability:     Experimental
 Category:      Interpreter
-Homepage:      https://github.com/dfinity/winter
-Bug-Reports:   https://github.com/dfinity/winter/issues
+Homepage:      https://github.com/dfinity-side-projects/winter
+Bug-Reports:   https://github.com/dfinity-side-projects/winter/issues
 Build-Type:    Simple
 
 Common generic
