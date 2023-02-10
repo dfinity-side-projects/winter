@@ -13,7 +13,7 @@
 
 module Wasm.Exec.EvalNumeric where
 
-import Data.Bits
+import Data.Bits hiding (And, Xor)
 import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
