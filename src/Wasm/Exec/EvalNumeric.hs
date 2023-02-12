@@ -13,7 +13,7 @@
 
 module Wasm.Exec.EvalNumeric where
 
-import Data.Bits hiding (And, Xor)
+import Data.Bits
 import Data.Int
 import Data.Word
 import Prelude hiding (lookup, elem)
@@ -232,9 +232,9 @@ class Numeric t => IntType t where
     DivU  -> idiv_u x y
     RemS  -> irem_s x y
     RemU  -> irem_u x y
-    And   -> Right $ iand_ x y
+    I.And -> Right $ iand_ x y
     Or    -> Right $ ior_ x y
-    Xor   -> Right $ ixor x y
+    I.Xor -> Right $ ixor x y
     Shl   -> Right $ ishl x y
     ShrS  -> Right $ ishr_s x y
     ShrU  -> Right $ ishr_u x y
