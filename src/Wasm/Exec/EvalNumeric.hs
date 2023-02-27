@@ -13,7 +13,7 @@
 
 module Wasm.Exec.EvalNumeric where
 
-import Data.Bits hiding (And, Xor)
+import Data.Bits (Bits, FiniteBits, (.&.), (.|.), xor, shiftL, shiftR, finiteBitSize, rotateL, rotateR, popCount, countLeadingZeros, countTrailingZeros)
 import Data.Int
 import Data.Kind (Type)
 import Data.Word
