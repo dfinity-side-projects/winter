@@ -2,12 +2,14 @@
 
 module Wasm.Syntax.Ops.Kind where
 
-data Unary :: *
+import Data.Kind (Type)
 
-data Binary :: *
+data Unary :: Type
 
-data Test :: *
+data Binary :: Type
 
-data Compare :: *
+data Test :: Type
 
-data Convert :: *
+data Compare :: Type
+
+data Convert :: Type

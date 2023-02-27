@@ -28,7 +28,7 @@ data TableInst m elem = TableInst
   }
 
 instance Show (TableInst m elem) where
-  showsPrec _d TableInst {..} = showString "TableInst"
+  showsPrec _d TableInst {} = showString "TableInst"
 
 makeLenses ''TableInst
 

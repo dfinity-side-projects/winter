@@ -15,6 +15,7 @@ import Data.Default.Class
 import Data.Fix
 import Data.Functor.Classes
 import Data.Functor.Identity
+import qualified Data.Kind as Kind (Type)
 import Data.List as List
 import Data.Text.Lazy as Text
 import qualified Data.Vector as V
@@ -31,7 +32,7 @@ import Wasm.Util.NFData
 import Wasm.Util.Show
 import Wasm.Util.Source
 
-type Var (phrase :: * -> *) = phrase Int
+type Var (phrase :: Kind.Type -> Kind.Type) = phrase Int
 
 _Var :: Traversable phrase => Traversal' (Var phrase) Int
 _Var = traverse
@@ -39,7 +40,7 @@ _Var = traverse
 {-# SPECIALIZE _Var :: Traversal' (Var Identity) Int #-}
 {-# SPECIALIZE _Var :: Traversal' (Var Phrase) Int #-}
 
-type Literal (phrase :: * -> *) = phrase Value
+type Literal (phrase :: Kind.Type -> Kind.Type) = phrase Value
 
 _Literal :: Traversable phrase => Traversal' (Literal phrase) Value
 _Literal = traverse
@@ -47,7 +48,7 @@ _Literal = traverse
 {-# SPECIALIZE _Literal :: Traversal' (Literal Identity) Value #-}
 {-# SPECIALIZE _Literal :: Traversal' (Literal Phrase) Value #-}
 
-type Type (phrase :: * -> *) = phrase FuncType
+type Type (phrase :: Kind.Type -> Kind.Type) = phrase FuncType
 
 _Type :: Traversable phrase => Traversal' (Type phrase) FuncType
 _Type = traverse
@@ -71,7 +72,7 @@ instance (Show1 phrase) => Show (BlockType phrase) where
       showString "ValBlockType " .
       showPrec 11 vt
 
-data InstrF (phrase :: * -> *) fix
+data InstrF (phrase :: Kind.Type -> Kind.Type) fix
   = Unreachable
   | Nop
   | Drop
@@ -240,7 +241,7 @@ instance (Show1 phrase) => Show1 (InstrF phrase) where
 
 type Instr phrase = Fix (InstrF phrase)
 
-type Expr (phrase :: * -> *) = phrase [phrase (Instr phrase)]
+type Expr (phrase :: Kind.Type -> Kind.Type) = phrase [phrase (Instr phrase)]
 
 data Global phrase
   = Global
@@ -467,12 +468,12 @@ instance NFData1 phrase => NFData (Func phrase) where
     rnf _funcLocals `seq`
     rnfLiftLift _funcBody
 
-type Table (phrase :: * -> *) = phrase TableType
+type Table (phrase :: Kind.Type -> Kind.Type) = phrase TableType
 
 _Table :: Traversable phrase => Traversal' (Table phrase) TableType
 _Table = traverse
 
-type Memory (phrase :: * -> *) = phrase MemoryType
+type Memory (phrase :: Kind.Type -> Kind.Type) = phrase MemoryType
 
 _Memory :: Traversable phrase => Traversal' (Memory phrase) MemoryType
 _Memory = traverse

@@ -1,5 +1,5 @@
-{ rev    ? "058f304d41966672be66efd978210b9ec8c81687" # release-21.11
-, sha256 ? "1l0x61jpiw2q78p7bgjk93slgqd3nbbfp0mxlivf6jhsmiymzpzj"
+{ rev    ? "6047d0269b0006756103db57bd5e47b8c4b6381b" # release-21.11
+, sha256 ? "sha256:0hsvb1z8nx9alrhix16bcdjnsa6bv39n691vw8bd1ikvbri4r8yv"
 
 , pkgs   ?
     if builtins.compareVersions builtins.nixVersion "2.0" < 0
@@ -24,7 +24,7 @@ spec-tests = pkgs.fetchFromGitHub {
     sha256 = "0difcpya5i7fc4xdrysx49186x9vh5yhm88dqpmfppj7ddj39l9i";
   };
 
-drv = pkgs.haskellPackages.developPackage {
+drv = pkgs.haskell.packages.ghc92.developPackage {
   name = "winter";
   root = ./.;
 
