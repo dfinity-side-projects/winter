@@ -6,12 +6,13 @@
 module Wasm.Syntax.Ops.Float where
 
 import           Control.DeepSeq
+import           Data.Kind (Type)
 import           GHC.Generics
 import           GHC.TypeLits
 
 import           Wasm.Syntax.Ops.Kind
 
-data family FloatOp :: Nat -> * -> *
+data family FloatOp :: Nat -> Type -> Type
 
 data instance FloatOp bits Unary
   = Abs | Neg | Ceil | Floor | Trunc | Nearest | Sqrt

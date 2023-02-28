@@ -11,13 +11,13 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v3.3.0
     - name: Cache /nix/store
-      uses: actions/cache@v1
+      uses: actions/cache@v3.2.6
       with:
         path: /nix/store
         key: ${{ matrix.os }}-nix-store
     - name: Install nix
-      uses: cachix/install-nix-action@v12
+      uses: cachix/install-nix-action@v19
     - name: Build
       run: nix-build --max-jobs 2

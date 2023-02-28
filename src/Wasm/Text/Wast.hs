@@ -34,6 +34,7 @@ import           Control.Monad.Except
 import           Control.Monad.Fail (MonadFail)
 import           Control.Monad.Trans.Control
 import           Control.Monad.Trans.State
+import           Data.Kind (Type)
 import           Data.Bifunctor
 import           Data.Bits ((.|.), (.&.), shiftL, complement)
 import           Data.ByteString.Lazy (ByteString)
@@ -71,9 +72,9 @@ import           Wasm.Util.Source
 -- import           Debug.Trace
 
 class Show (Value w) => WasmEngine w m where
-  type Value w :: *
-  type Module w :: *
-  type ModuleInst w m :: *
+  type Value w :: Type
+  type Module w :: Type
+  type ModuleInst w m :: Type
 
   const_i32 :: Int32 -> Value w
   const_i64 :: Int64 -> Value w

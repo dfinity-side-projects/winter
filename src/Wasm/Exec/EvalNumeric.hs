@@ -13,8 +13,9 @@
 
 module Wasm.Exec.EvalNumeric where
 
-import Data.Bits
+import Data.Bits (Bits, FiniteBits, (.&.), (.|.), xor, shiftL, shiftR, finiteBitSize, rotateL, rotateR, popCount, countLeadingZeros, countTrailingZeros)
 import Data.Int
+import Data.Kind (Type)
 import Data.Word
 import Prelude hiding (lookup, elem)
 import GHC.Float
@@ -37,7 +38,7 @@ data NumericError
   deriving (Show)
 
 class Numeric t where
-  type OpType t :: * -> *
+  type OpType t :: Type -> Type
 
   valueType :: ValueType
 

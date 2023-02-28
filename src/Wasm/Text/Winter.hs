@@ -13,6 +13,7 @@ import           Control.Monad.Primitive
 import           Data.Binary.Get
 import           Data.Bifunctor
 import           Data.Functor.Classes
+import           Data.Kind (Type)
 
 import           Wasm.Text.Wast
 import qualified Wasm.Binary.Decode as Decode
@@ -22,7 +23,7 @@ import qualified Wasm.Syntax.AST as AST
 import qualified Wasm.Syntax.Values as Values
 import           Wasm.Util.Source
 
-data Winter (f :: * -> *) = Winter
+data Winter (f :: Type -> Type) = Winter
 
 instance (PrimMonad m, Regioned f, Decode.Decodable f, Show1 f)
     => WasmEngine (Winter f) m where

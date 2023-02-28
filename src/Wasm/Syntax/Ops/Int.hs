@@ -6,13 +6,14 @@
 module Wasm.Syntax.Ops.Int where
 
 import           Control.DeepSeq
+import           Data.Kind (Type)
 import           GHC.Generics
 import           GHC.TypeLits
 
 import           Wasm.Syntax.Types
 import           Wasm.Syntax.Ops.Kind
 
-data family IntOp :: Nat -> * -> *
+data family IntOp :: Nat -> Type -> Type
 
 data instance IntOp bits Unary
   = Clz | Ctz | Popcnt | ExtendS PackSize

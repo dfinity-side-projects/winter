@@ -8,6 +8,7 @@ module Wasm.Syntax.DSL where
 import Control.Monad.Writer
 import Data.Fix
 import Data.Int
+import qualified Data.Kind as Kind (Type)
 import Data.Void
 
 import Wasm.Syntax.AST
@@ -18,7 +19,7 @@ import Wasm.Syntax.Ops.Int as I
 import Wasm.Syntax.Types
 
 class Monad (WasmM t) => Wasm t where
-  data WasmM t :: * -> *
+  data WasmM t :: Kind.Type -> Kind.Type
 
   -- Control flow operators.
   unreachable :: WasmM t Void
