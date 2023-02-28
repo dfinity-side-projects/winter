@@ -24,10 +24,40 @@ spec-tests = pkgs.fetchFromGitHub {
     sha256 = "0difcpya5i7fc4xdrysx49186x9vh5yhm88dqpmfppj7ddj39l9i";
   };
 
-drv = pkgs.haskell.packages.ghc92.developPackage {
+haskellPackages = pkgs.haskellPackages;
+
+# wabt >= 1.0.25 (until at least 1.0.32) cause winter's test suite to fail on
+# the line: https://github.com/WebAssembly/testsuite/blob/35c50bf6fbb002cfdc1227b0af731bdcaf877714/elem.wast#L15
+# with the error:
+#
+#   line 4
+#     user error (./test1296-222.wat:13:4: error: redefinition of elem "$t"
+#       (elem $t (i32.const 0) $f $f)
+#        ^^^^
+#     ./test1296-222.wat:14:4: error: redefinition of elem "$t"
+#       (elem $t (offset (i32.const 0)))
+#        ^^^^
+#     ./test1296-222.wat:15:4: error: redefinition of elem "$t"
+#       (elem $t (offset (i32.const 0)) $f $f)
+#        ^^^^
+#     )
+#
+# So we keep wabt at 1.0.24:
+wabt = pkgs.wabt.overrideAttrs (_old: rec {
+  name = "wabt-${version}";
+  version = "1.0.24";
+  src = pkgs.fetchFromGitHub {
+    owner = "WebAssembly";
+    repo = "wabt";
+    rev = version;
+    sha256 = "sha256-/blukivL6+xsnChxDp5gCr5w8S3bBuhO459YkLGxYmA=";
+    fetchSubmodules = true;
+  };
+});
+
+drv = haskellPackages.developPackage {
   name = "winter";
   root = ./.;
-
   overrides = with pkgs.haskell.lib; self: super: {
   };
 
@@ -35,7 +65,9 @@ drv = pkgs.haskell.packages.ghc92.developPackage {
 
   modifier = drv: pkgs.haskell.lib.overrideCabal drv (attrs: {
     buildTools = (attrs.buildTools or []) ++ [
-      pkgs.wabt
+      wabt
+      pkgs.cabal-install
+      haskellPackages.haskell-language-server
     ];
 
     passthru = {
