@@ -1,16 +1,16 @@
 Cabal-Version: 2.2
 Name:          winter
-Version:       1.0.0
+Version:       1.1.0
 Synopsis:      Haskell port of the WebAssembly OCaml reference interpreter
 License:       MIT
 License-file:  LICENSE
-Copyright:     2018-2019 DFINITY Stiftung
+Copyright:     2018-2021 DFINITY Stiftung
 Author:        Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.org>
 Maintainer:    Enzo Haussecker <enzo@dfinity.org>, John Wiegley <john@dfinity.org>
 Stability:     Experimental
 Category:      Interpreter
-Homepage:      https://github.com/dfinity/winter
-Bug-Reports:   https://github.com/dfinity/winter/issues
+Homepage:      https://github.com/dfinity-side-projects/winter
+Bug-Reports:   https://github.com/dfinity-side-projects/winter/issues
 Build-Type:    Simple
 
 Common generic

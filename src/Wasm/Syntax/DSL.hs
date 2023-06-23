@@ -79,6 +79,8 @@ class Monad (WasmM t) => Wasm t where
   -- Memory operators.
   memory_size :: WasmM t ()
   memory_grow :: WasmM t ()
+  memory_fill :: WasmM t ()
+  memory_copy :: WasmM t ()
 
   -- Constants.
   i32_const :: Int32 -> WasmM t ()
@@ -307,6 +309,8 @@ instance Applicative f => Wasm [Instr f] where
   -- Memory operators.
   memory_size = WasmM $ tell [Fix $ MemorySize]
   memory_grow = WasmM $ tell [Fix $ MemoryGrow]
+  memory_fill = WasmM $ tell [Fix $ MemoryFill]
+  memory_copy = WasmM $ tell [Fix $ MemoryCopy]
 
   -- Constants.
   i32_const x = WasmM $ tell [Fix $ Const (pure (I32 x))]

@@ -479,6 +479,48 @@ step(Code cs cfg vs (e:es)) = (`runReaderT` cfg) $ do
                   Right () -> oldSize
           k (I32 result : vs') es
 
+        (MemoryFill, I32 0 : _ : I32 dst : vs') -> {-# SCC step_MemoryFill #-} do
+          inst    <- getFrameInst
+          mem     <- lift $ memory inst (0 @@ at)
+          -- Zero len with offset out-of-bounds at the end of memory is allowed
+          sz      <- lift $ lift $ Memory.size mem
+          if Memory.pageSize * sz >= dst
+            then k vs' es
+            else k vs' (Trapping (memoryErrorString Memory.MemoryBoundsError) @@ at : es)
+
+        (MemoryFill, I32 cnt : v : I32 dst : vs') -> {-# SCC step_MemoryFill #-} do
+          inst    <- getFrameInst
+          mem     <- lift $ memory inst (0 @@ at)
+          let [addr, count] = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, cnt]
+          if addr + count > 2^32
+            then k vs' (Trapping (memoryErrorString Memory.MemoryBoundsError) @@ at : es)
+            else do
+              eres <- lift $ lift $ runExceptT $ mapM_ (\off -> Memory.storePacked Pack8 mem addr off v) [0 .. pred cnt]
+              case eres of
+                Right () -> k vs' es
+                Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+
+        (MemoryCopy, I32 0 : I32 src : I32 dst : vs') -> {-# SCC step_MemoryCopy #-} do
+          inst    <- getFrameInst
+          mem     <- lift $ memory inst (0 @@ at)
+          -- Zero len with src/dest offset out-of-bounds at the end of memory is allowed
+          sz      <- lift $ lift $ Memory.size mem
+          if Memory.pageSize * sz >= dst && Memory.pageSize * sz >= src
+            then k vs' es
+            else k vs' (Trapping (memoryErrorString Memory.MemoryBoundsError) @@ at : es)
+
+        (MemoryCopy, I32 cnt : I32 src : I32 dst : vs') -> {-# SCC step_MemoryCopy #-} do
+          inst    <- getFrameInst
+          mem     <- lift $ memory inst (0 @@ at)
+          let [addr_dst, addr_src, count] = fromIntegral . i64_extend_u_i32 . fromIntegral <$> [dst, src, cnt]
+          let range = if dst < src then [0 .. pred cnt] else tail $ enumFromThenTo cnt (pred cnt) 0
+          eres <- lift $ lift $ runExceptT $
+            mapM_ (\addr -> Memory.loadPacked Pack8 ZX mem (addr + pred count) 0 I32Type) [addr_dst, addr_src]
+            >> mapM_ (\off -> Memory.loadPacked Pack8 ZX mem addr_src off I32Type >>= Memory.storePacked Pack8 mem addr_dst off) range
+          case eres of
+            Right () -> k vs' es
+            Left exn -> k vs' (Trapping (memoryErrorString exn) @@ at : es)
+
         (Const v, vs) -> {-# SCC step_Const #-}
           k (value v : vs) es
 

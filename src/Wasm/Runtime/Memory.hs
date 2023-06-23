@@ -24,6 +24,7 @@ module Wasm.Runtime.Memory
   , loadValue
   , exportMemory
   , importMemory
+  , pageSize
   ) where
 
 import           Control.Exception
